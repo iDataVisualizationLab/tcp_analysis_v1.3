@@ -1,0 +1,8 @@
+{
+  "normal": -1,
+  "spambot - client compromise": 0,
+  "ddos": 1,
+  "c2-based": 2,
+  "post-phishing c2": 3,
+  "other": 4
+}

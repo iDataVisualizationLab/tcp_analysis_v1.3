@@ -1,0 +1,9 @@
+{
+  "normal": "#4B4B4B",                   
+  "spambot - client compromise": "#e7298a", 
+  "ddos": "#7570b3",                     
+  "c2-based": "#d95f02",                 
+  "post-phishing c2": "#1b9e77",         
+  "other": "#66a61e"                     
+}
+

@@ -1,0 +1,34 @@
+{
+  "version": "3.0",
+  "format": "multires_packets",
+  "created": "2026-01-14T23:48:41.780879",
+  "source_file": ".\\attack_packets_first5days.csv",
+  "total_packets": 24469142,
+  "unique_ips": 294,
+  "time_range": {
+    "start": 1257254652674641,
+    "end": 1257654102004202,
+    "duration": 399449329561
+  },
+  "resolutions": {
+    "seconds": {
+      "resolution_microseconds": 1000000,
+      "total_bins": 916036,
+      "index": "resolutions/seconds/index.json",
+      "data": "resolutions/seconds/data.csv"
+    },
+    "milliseconds": {
+      "resolution_microseconds": 1000,
+      "total_bins": 23504598,
+      "total_chunks": 49,
+      "index": "resolutions/milliseconds/index.json"
+    },
+    "raw": {
+      "resolution_microseconds": 1,
+      "total_packets": 24469142,
+      "total_chunks": 1198,
+      "chunk_duration_seconds": 60,
+      "index": "resolutions/raw/index.json"
+    }
+  }
+}

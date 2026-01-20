@@ -1,0 +1,49 @@
+{ 
+  "normal": "#4B4B4B",  
+  "client compromise": "#D41159",  
+  "malware ddos": "#2A9D4F",  
+  "scan /usr/bin/nmap": "#C9A200",  
+  "ddos": "#264D99",  
+  "failed attack framework-2.6/msfcli iis_nsiislog_po": "#CC6C1D",  
+  "no precursor client compromise exfil/sams_launch_v": "#6A0DAD",  
+  "c2 + tcp control channel exfil - no precursor nc": "#178DBD",  
+  "c2 + control channel exfil - no precursor nc": "#B030B0",  
+  "phishing email exploit/malware/trawler": "#79C000",  
+  "post-phishing c2 exploit/malware/malclient.pl": "#D98CA8",  
+  "post-phishing c2 + tcp control channel exfil explo": "#2E7C71",  
+  "failed attack framework-2.6/msfcli cabrightstor_di": "#A884E5",  
+  "post-phishing c2 heartbeat exploit/malware/malclie": "#6B4F1D",  
+  "spambot client compromise": "#F5E663",  
+  "spambot malicious download": "#660000",  
+  "spam bot": "#1A7F7F",  
+  "post-phishing client compromise + malicious download": "#E6A96B",  
+  "post-phishing c2 + tcp control channel exfil nc": "#007ACC",  
+  "break-DNS_1_exploit echo": "#666600",  
+  "c2 remote command execution nc": "#D97700",  
+  "c2+ tcp control channel exfil nc": "#008B8B",
+  "failed attack framework-2.6/msfcli windows_ssl_pct": "#BF7F2F",
+  "failed attack exploit/iis-asp-overflow": "#A65E2E",
+  "failed attack or scan exploit/bin/iis_nsiislog.pl": "#8F4A1E",
+  "failed attack or scan exploit/bin/webstar_ftp_user": "#B96B3C",
+
+  "post-phishing c2 echo": "#5E81AC",
+  "post-phishing icmp exfil nc": "#2B9EB3",
+  "post-phishing tcp exfil nc": "#2F8F83",
+
+  "c2+ tcp control channel exfil - no precursor nc": "#1A9CA3",
+
+  "out2in": "#7B8DA6",
+  "out2in dns": "#8A9A37",
+
+  "compromised_server": "#AA3377",
+
+  "router-rewrite /home/administrator/attack-scripts/": "#9C8A0E",
+  "router-redirect /home/administrator/attack-scripts": "#8E7C0C",
+
+  "break-DNS_1 /home/administrator/attack-scripts/sdu": "#556B2F",
+  "dns-rewrite /home/administrator/attack-scripts/sdu": "#6B8E23",
+
+  "noisy-blackhole_exploit echo": "#5C3566",
+  "noisy-blackhole_64-127 /home/administrator/attack-": "#7A3B8F"
+}
+

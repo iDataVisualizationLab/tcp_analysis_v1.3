@@ -1,0 +1,14 @@
+{
+  "closing": {
+    "graceful": "#66bb6a",
+    "abortive": "#1b5e20"
+  },
+  "invalid": {
+    "invalid_ack": "#ff0000",
+    "invalid_synack": "#ff3300",
+    "rst_during_handshake": "#6a1b9a",
+    "incomplete_no_synack": "#cc6600",
+    "incomplete_no_ack": "#ffcc00",
+    "unknown_invalid": "#ffff00"
+  }
+}
