@@ -15,6 +15,7 @@ packets_data/attack_flows_day1to5/flows/by_pair/
 
 # Data files
 *.csv
+!set1_first90_minutes.csv
 
 # Windows artifacts
 nul
