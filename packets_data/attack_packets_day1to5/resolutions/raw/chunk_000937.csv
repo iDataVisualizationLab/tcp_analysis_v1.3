@@ -1,0 +1,3 @@
+timestamp,src_ip,dst_ip,src_port,dst_port,flags,flag_type,length
+1257500709280616,172.28.4.7,20.21.128.24,80,45968,18,SYN+ACK,60
+1257500710480648,172.28.4.7,5.180.127.39,80,22209,18,SYN+ACK,60
