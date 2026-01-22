@@ -79,14 +79,12 @@ The `index.html` redirects to `attack_timearcs.html` by default.
 5. **Resolution Management** → `resolution-manager.js` handles zoom-level data with LRU caching
 6. **Rendering** → stacked bars by flag type, arcs between IPs
 
-**Flow Data for Overview Chart** (ip_bar_diagram.js:1703-1743):
+**Flow Data for Overview Chart** (ip_bar_diagram.js:1703-1757):
 - When IPs are selected, `updateIPFilter()` is called (async function)
-- Filters `chunks_meta.json` to find chunks containing selected IPs
-- **Current approach**: Fetches ALL matching chunk files (e.g., chunk_00000.json, chunk_00001.json, ...)
-- Loads full flow objects with `startTime`, `closeType`, `invalidReason` properties
-- Filters flows where BOTH `initiator` AND `responder` match selected IPs
-- Passes filtered flows to `overview_chart.js` for categorization and binning
-- **Limitation**: Slow when thousands of chunks match selected IPs (common for popular IPs like attacker sources)
+- Uses adaptive multi-resolution loader (`flow_bins_index.json`) for efficient overview rendering
+- Falls back to `flow_bins.json` or chunk loading if multi-resolution not available
+- For v3 format (`chunked_flows_by_ip_pair`), filters chunks by IP pair first for efficiency
+- Passes filtered/aggregated data to `overview_chart.js` for categorization and binning
 
 ### Worker Pattern
 
@@ -115,25 +113,43 @@ The `index.html` redirects to `attack_timearcs.html` by default.
 
 **TCP Analysis CSV**: `timestamp, src_ip, dst_ip, src_port, dst_port, flags, length, ...`
 
-**Folder-based data** (flow-based chunking):
+**Folder-based data** (v3 format - `chunked_flows_by_ip_pair`):
 ```
 packets_data/attack_flows_day1to5/
-├── manifest.json          # Dataset metadata (version, format, totals, time range)
+├── manifest.json              # Dataset metadata (version 3.0, format, totals, time range)
 ├── flows/
-│   ├── chunks_meta.json   # Chunk index with flow category summaries per chunk
-│   ├── chunk_00000.json   # ~300 flows with full packet data in phases
-│   ├── chunk_00001.json
-│   └── ...                # (18,277 chunks total for 5.4M flows)
+│   ├── pairs_meta.json        # IP pair index with per-pair chunk metadata
+│   └── by_pair/               # Flows organized by IP pair (efficient filtering)
+│       ├── 172-28-4-7__19-202-221-71/
+│       │   ├── chunk_00000.json
+│       │   ├── chunk_00001.json
+│       │   └── ...
+│       └── ...                # (574 IP pairs, 1318 total chunks)
 ├── indices/
-│   └── bins.json          # Time bins with TOTAL packet counts only
-│                          # (NOT flow-categorized - insufficient for overview chart)
+│   ├── bins.json              # Time bins with total packet counts
+│   ├── flow_bins.json         # Pre-aggregated flows by IP pair (single resolution)
+│   ├── flow_bins_index.json   # Multi-resolution index for adaptive loading
+│   ├── flow_bins_1min.json    # 1-minute resolution bins
+│   ├── flow_bins_10min.json   # 10-minute resolution bins
+│   └── flow_bins_hour.json    # Hourly resolution bins
 └── ips/
-    ├── ip_stats.json      # Per-IP packet/byte counts
-    ├── flag_stats.json    # Global TCP flag distribution
-    └── unique_ips.json    # List of all IPs in dataset
+    ├── ip_stats.json          # Per-IP packet/byte counts
+    ├── flag_stats.json        # Global TCP flag distribution
+    └── unique_ips.json        # List of all IPs in dataset
 ```
 
-**Important**: `indices/bins.json` contains only total packet counts per time bin without flow categorization (graceful/abortive/invalid breakdowns). The overview chart currently loads all relevant chunk files to get categorized flow data, which is inefficient. See "Overview Chart" section for recommended `flow_bins.json` solution.
+**Legacy v2 format** (`chunked_flows`) also supported:
+```
+packets_data/attack_flows_day1to5_v2/
+├── manifest.json          # version 2.2, format: chunked_flows
+├── flows/
+│   ├── chunks_meta.json   # Flat chunk index
+│   ├── chunk_00000.json   # ~300 flows per chunk
+│   └── ...
+└── ...
+```
+
+The code auto-detects format from `manifest.json` and loads appropriately.
 
 ## Key Implementation Details
 
@@ -152,13 +168,27 @@ The `overview_chart.js` module (~900 LOC) provides:
 - Brush-based time range selection synced with main chart zoom
 - Legend integration for filtering by invalid reason/close type
 
-**Current Implementation** (Optimized with flow_bins.json):
-- `ip_bar_diagram.js` loads `flow_bins.json` when flow data is loaded (line 4222-4233)
-- Filters pre-aggregated flow bins by selected IP pairs (line 1703-1757)
+**Current Implementation** (Multi-resolution adaptive loading):
+- `ip_bar_diagram.js` initializes `AdaptiveOverviewLoader` from `flow_bins_index.json`
+- Loader selects appropriate resolution based on visible time range (hour → 10min → 1min)
+- Filters pre-aggregated flow bins by selected IP pairs
 - Creates synthetic flows from bin data for overview chart
-- **Fallback**: If `flow_bins.json` not available, loads chunk files (line 1758-1798)
+- **Fallback chain**: adaptive loader → `flow_bins.json` → chunk loading
 
-**flow_bins.json Structure**:
+**Multi-resolution index** (`flow_bins_index.json`):
+```json
+{
+  "version": "1.0",
+  "created": "2026-01-21T10:43:00",
+  "resolutions": {
+    "hour": { "file": "flow_bins_hour.json", "bin_duration_us": 3600000000 },
+    "10min": { "file": "flow_bins_10min.json", "bin_duration_us": 600000000 },
+    "1min": { "file": "flow_bins_1min.json", "bin_duration_us": 60000000 }
+  }
+}
+```
+
+**flow_bins.json Structure** (per resolution):
 ```json
 [
   {
@@ -182,19 +212,15 @@ The `overview_chart.js` module (~900 LOC) provides:
 ```
 
 **Benefits**:
-- **Instant loading**: 1MB file vs. thousands of chunk files
-- **Accurate distribution**: Flows binned by actual timestamps
+- **Adaptive resolution**: Coarse bins for overview, fine bins when zoomed
+- **Instant loading**: Small files vs. thousands of chunk files
 - **Efficient filtering**: Pre-aggregated by IP pair
 - **Reduced memory**: No need to load full flow objects for overview
 
-**Generating flow_bins.json**:
+**Generating multi-resolution flow bins**:
 ```bash
-# From existing chunks (no CSV reprocessing needed)
-python generate_flow_bins.py --input-dir attack_flows_day1to5
-
-# Or from scratch (regenerates all data)
-python tcp_data_loader_streaming.py --data attack_packets_first5days.csv \
-    --ip-map full_ip_map.json --output-dir attack_flows_day1to5
+# Generate all resolutions from existing v3 data
+python packets_data/generate_flow_bins_v3.py --input-dir packets_data/attack_flows_day1to5
 ```
 
 ### Ground Truth Integration
@@ -221,6 +247,8 @@ The fisheye lens effect (`src/plugins/d3-fisheye.js`, wrapped by `src/scales/dis
 - **Batch processing**: Flow reconstruction and list rendering use configurable batch sizes
 - **LRU Cache**: `resolution-manager.js` caches loaded detail chunks with automatic eviction
 - **Multi-resolution loading**: Zoom-level dependent data loading (overview → detail)
+- **IP-pair organization** (v3): Chunks organized by IP pair enable efficient filtering—only load chunks for selected IP pairs instead of scanning all chunks
+- **Adaptive overview resolution**: Coarse bins for full view, fine bins when zoomed
 
 ## Module Dependencies
 

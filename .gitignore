@@ -10,6 +10,9 @@ packets_data/*
 !packets_data/attack_packets_day1to5/
 !packets_data/attack_flows_day1to5/
 
+# Exclude large flow chunk data (12GB) - keep pairs_meta.json for metadata
+packets_data/attack_flows_day1to5/flows/by_pair/
+
 # Data files
 *.csv
 

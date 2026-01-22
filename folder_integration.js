@@ -748,58 +748,64 @@ async function loadFlowDetailWithPackets(flowSummary) {
 
     console.log(`[FlowDetail] Loading detail for flow ${flowId}, startTime: ${flowStartTime}`);
 
-    // Find the chunk that contains this flow based on time range
-    // A flow should be in a chunk where chunk.start <= flow.startTime <= chunk.end
-    let targetChunk = null;
+    // Find ALL chunks that could contain this flow based on time range AND IPs
+    // Note: Chunks can have overlapping time ranges, so we need to search multiple chunks
+    const { initiator, responder, initiatorPort, responderPort } = flowSummary;
+
     console.log(`[FlowDetail] Searching for chunk containing flow with startTime ${flowStartTime}`);
+    console.log(`[FlowDetail] Connection: ${initiator}:${initiatorPort} ↔ ${responder}:${responderPort}`);
     console.log(`[FlowDetail] First few chunk time ranges:`, chunksMeta.slice(0, 5).map(c => ({file: c.file, start: c.start, end: c.end})));
 
+    // Collect all candidate chunks (matching time range and IPs)
+    const candidateChunks = [];
     for (const chunk of chunksMeta) {
         if (chunk.start <= flowStartTime && flowStartTime <= chunk.end) {
-            targetChunk = chunk;
-            console.log(`[FlowDetail] Found target chunk: ${chunk.file}`);
-            break;
-        }
-    }
+            // Also check if chunk contains both initiator and responder IPs
+            const chunkIPs = chunk.ips || [];
+            const hasInitiator = chunkIPs.includes(initiator);
+            const hasResponder = chunkIPs.includes(responder);
 
-    if (!targetChunk) {
-        // Fallback: search all chunks by scanning (slower)
-        console.warn(`[FlowDetail] Could not find chunk by time range, scanning all chunks for flow ${flowId}`);
-        console.warn(`[FlowDetail] Flow startTime ${flowStartTime} not in any chunk time range`);
-
-        // Only scan first 10 chunks to avoid long delays
-        const chunksToScan = chunksMeta.slice(0, Math.min(10, chunksMeta.length));
-        for (const chunk of chunksToScan) {
-            console.log(`[FlowDetail] Scanning chunk ${chunk.file}...`);
-            const flows = await loadChunkFromCache(chunk.file, flowsDir, chunkCache);
-            console.log(`[FlowDetail] Chunk has ${flows.length} flows, first IDs:`, flows.slice(0, 3).map(f => f.id));
-            const found = flows.find(f => f.id === flowId);
-            if (found) {
-                console.log(`[FlowDetail] Found flow ${flowId} in ${chunk.file}`);
-                return found;
+            if (hasInitiator && hasResponder) {
+                candidateChunks.push(chunk);
             }
         }
-        console.error(`[FlowDetail] Flow ${flowId} not found in first ${chunksToScan.length} chunks`);
+    }
+
+    console.log(`[FlowDetail] Found ${candidateChunks.length} candidate chunks`);
+
+    if (candidateChunks.length === 0) {
+        console.error(`[FlowDetail] No chunks match flow ${flowId} (${initiator} ↔ ${responder} @ ${flowStartTime})`);
         return null;
     }
 
-    // Load the chunk and find the flow
-    console.log(`[FlowDetail] Loading chunk: ${targetChunk.file}`);
-    const flows = await loadChunkFromCache(targetChunk.file, flowsDir, chunkCache);
-    console.log(`[FlowDetail] Loaded ${flows.length} flows from chunk`);
-    console.log(`[FlowDetail] Looking for flow ID: ${flowId}`);
-    console.log(`[FlowDetail] Sample flow IDs in chunk:`, flows.slice(0, 5).map(f => f.id));
+    // Search through all candidate chunks until we find the flow
+    for (const chunk of candidateChunks) {
+        console.log(`[FlowDetail] Searching chunk ${chunk.file}...`);
+        const flows = await loadChunkFromCache(chunk.file, flowsDir, chunkCache);
 
-    const flow = flows.find(f => f.id === flowId);
+        // Try to find by ID first
+        let flow = flows.find(f => f.id === flowId);
 
-    if (!flow) {
-        console.error(`[FlowDetail] Flow ${flowId} not found in ${targetChunk.file}`);
-        console.error(`[FlowDetail] All flow IDs in chunk:`, flows.map(f => f.id));
-        return null;
+        // If not found by ID, try matching by connection tuple + startTime
+        if (!flow) {
+            flow = flows.find(f =>
+                f.initiator === initiator &&
+                f.responder === responder &&
+                f.initiatorPort === initiatorPort &&
+                f.responderPort === responderPort &&
+                Math.abs(f.startTime - flowStartTime) < 1000 // Within 1ms
+            );
+        }
+
+        if (flow) {
+            console.log(`[FlowDetail] ✅ Found flow ${flowId} in ${chunk.file} with ${countFlowPackets(flow)} packets`);
+            return flow;
+        }
+        console.log(`[FlowDetail] Flow not in ${chunk.file}, continuing search...`);
     }
 
-    console.log(`[FlowDetail] Loaded flow ${flowId} with ${countFlowPackets(flow)} packets`);
-    return flow;
+    console.error(`[FlowDetail] ❌ Flow ${flowId} not found in any of ${candidateChunks.length} candidate chunks`);
+    return null;
 }
 
 /**

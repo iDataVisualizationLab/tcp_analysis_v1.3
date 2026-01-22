@@ -723,6 +723,8 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
         .on('brush end', brushed);
 
     overviewSvg.append('g').attr('class', 'brush').call(overviewBrush);
+    // Disable pointer events on brush overlay so clicks can pass through to bars
+    overviewSvg.select('.brush .overlay').style('pointer-events', 'none');
     // Initialize brush selection to match the CURRENT zoom domain (not full extent)
     // Set flag to prevent this initialization from triggering applyZoomDomain
     isUpdatingFromZoom = true;
@@ -1165,6 +1167,8 @@ export function createOverviewFromPairs(pairOverview, selectedIPs, options) {
         .on('brush end', brushed);
 
     overviewSvg.append('g').attr('class', 'brush').call(overviewBrush);
+    // Disable pointer events on brush overlay so clicks can pass through to bars
+    overviewSvg.select('.brush .overlay').style('pointer-events', 'none');
 
     // Initialize brush selection
     isUpdatingFromZoom = true;
@@ -1340,6 +1344,363 @@ export function refreshFlowOverview() {
 
     // Re-create the overview chart with updated flows
     createOverviewChart(currentFlows, { timeExtent, width, margins });
+}
+
+/**
+ * Create overview chart directly from pre-aggregated adaptive bin data.
+ * This is an optimized path that avoids creating individual flow objects.
+ *
+ * @param {Object} adaptiveData - Data from AdaptiveOverviewLoader.getOverviewData()
+ * @param {Object} options - Chart options
+ * @param {[number,number]} options.timeExtent - Time range [start, end] in microseconds
+ * @param {number} options.width - Chart width
+ * @param {Object} options.margins - Chart margins
+ */
+export function createOverviewFromAdaptive(adaptiveData, { timeExtent, width, margins }) {
+    console.log(`[OverviewChart] createOverviewFromAdaptive called with ${adaptiveData.bins.length} bins, resolution: ${adaptiveData.resolution}`);
+    const d3 = d3Ref;
+    if (!d3) {
+        console.error('[OverviewChart] d3Ref is not set! initOverview may not have been called.');
+        return;
+    }
+
+    d3.select('#overview-chart').html('');
+    const container = document.getElementById('overview-container');
+    if (container) container.style.display = 'block';
+
+    // Use chart margins for alignment with main chart
+    const chartMargins = margins || (getChartMarginsRef ? getChartMarginsRef() : { left: 150, right: 120, top: 80, bottom: 50 });
+    const legendHeight = 35;
+    const overviewMargin = { top: 15 + legendHeight, right: chartMargins.right, bottom: 30, left: chartMargins.left };
+    overviewWidth = Math.max(100, width);
+    overviewHeight = 100;
+
+    const overviewSvgContainer = d3.select('#overview-chart').append('svg')
+        .attr('width', overviewWidth + overviewMargin.left + overviewMargin.right)
+        .attr('height', overviewHeight + overviewMargin.top + overviewMargin.bottom);
+
+    overviewSvg = overviewSvgContainer.append('g')
+        .attr('transform', `translate(${overviewMargin.left},${overviewMargin.top})`);
+
+    overviewXScale = d3.scaleLinear().domain(timeExtent).range([0, overviewWidth]);
+
+    // Define category mappings for the adaptive data
+    const invalidReasons = ['rst_during_handshake', 'invalid_ack', 'invalid_synack', 'incomplete_no_synack', 'incomplete_no_ack', 'unknown_invalid'];
+    const closingTypes = ['graceful', 'abortive'];
+    const ongoingTypes = ['open', 'ongoing'];
+
+    // Build color schemes (same as createOverviewChart)
+    const invalidFlowColors = {
+        'invalid_ack': flowColors.invalid?.invalid_ack || d3.color(flagColors['ACK'] || '#27ae60').darker(0.5).formatHex(),
+        'invalid_synack': flowColors.invalid?.invalid_synack || d3.color(flagColors['SYN+ACK'] || '#f39c12').darker(0.5).formatHex(),
+        'rst_during_handshake': flowColors.invalid?.rst_during_handshake || d3.color(flagColors['RST'] || '#34495e').darker(0.5).formatHex(),
+        'incomplete_no_synack': flowColors.invalid?.incomplete_no_synack || d3.color(flagColors['SYN+ACK'] || '#f39c12').brighter(0.5).formatHex(),
+        'incomplete_no_ack': flowColors.invalid?.incomplete_no_ack || d3.color(flagColors['ACK'] || '#27ae60').brighter(0.5).formatHex(),
+        'unknown_invalid': flowColors.invalid?.unknown_invalid || d3.color(flagColors['OTHER'] || '#bdc3c7').darker(0.5).formatHex()
+    };
+    const closeColors = {
+        graceful: flowColors.closing?.graceful || '#8e44ad',
+        abortive: flowColors.closing?.abortive || '#c0392b'
+    };
+    const ongoingColors = {
+        open: flowColors.ongoing?.open || '#6c757d',
+        ongoing: flowColors.ongoing?.incomplete || '#adb5bd'
+    };
+
+    const axisY = overviewHeight - 30;
+    const chartHeightUp = Math.max(10, axisY - 6);
+    const chartHeightUpOngoing = chartHeightUp * 0.45;
+    const chartHeightUpClosing = chartHeightUp - chartHeightUpOngoing;
+    const brushTopY = overviewHeight - 4;
+    const invalidAxisGap = 6;
+    const chartHeightDown = Math.max(6, brushTopY - axisY - 4);
+
+    // Determine present reasons for row layout
+    const presentReasonsSet = new Set();
+    for (const bin of adaptiveData.bins) {
+        for (const reason of invalidReasons) {
+            if (bin.counts[reason] > 0) presentReasonsSet.add(reason);
+        }
+    }
+    const presentReasons = invalidReasons.filter(r => presentReasonsSet.has(r));
+    const reasons = presentReasons.length ? presentReasons : ['unknown_invalid'];
+
+    // Compute max values for scaling
+    let maxTotal = 0;
+    for (const bin of adaptiveData.bins) {
+        let total = 0;
+        for (const count of Object.values(bin.counts)) {
+            total += count;
+        }
+        if (total > maxTotal) maxTotal = total;
+    }
+    const sharedMax = Math.max(1, maxTotal);
+
+    // Build segments for rendering
+    const segments = [];
+    for (const bin of adaptiveData.bins) {
+        const x0 = overviewXScale(bin.start);
+        const x1 = overviewXScale(bin.end);
+        const widthPx = Math.max(1, x1 - x0);
+        const baseX = x0;
+
+        // Upward stacking: closing types (top band)
+        let yTop = axisY - chartHeightUpOngoing;
+        for (const t of closingTypes) {
+            const count = bin.counts[t] || 0;
+            if (count === 0) continue;
+            const h = (count / sharedMax) * chartHeightUpClosing;
+            yTop -= h;
+            segments.push({
+                kind: 'closing', closeType: t, reason: null,
+                x: baseX, y: yTop, width: widthPx, height: h,
+                count, flows: [], binIndex: bin.binIndex
+            });
+        }
+
+        // Ongoing types (middle band)
+        const centerY = axisY - (chartHeightUpOngoing / 2);
+        for (const t of ongoingTypes) {
+            const count = bin.counts[t] || 0;
+            if (count === 0) continue;
+            const h = (count / sharedMax) * (chartHeightUpOngoing / 2);
+            const y = t === 'open' ? centerY - h : centerY;
+            segments.push({
+                kind: 'ongoing', closeType: t, reason: null,
+                x: baseX, y, width: widthPx, height: h,
+                count, flows: [], binIndex: bin.binIndex
+            });
+        }
+
+        // Downward stacking: invalid reasons
+        let yBottom = axisY + invalidAxisGap;
+        for (const reason of reasons) {
+            const count = bin.counts[reason] || 0;
+            if (count === 0) continue;
+            const h = (count / sharedMax) * chartHeightDown;
+            segments.push({
+                kind: 'invalid', reason, closeType: null,
+                x: baseX, y: yBottom, width: widthPx, height: h,
+                count, flows: [], binIndex: bin.binIndex
+            });
+            yBottom += h;
+        }
+    }
+
+    // Render segments
+    const getSegmentColor = (d) => {
+        if (d.kind === 'invalid') return invalidFlowColors[d.reason] || '#999';
+        if (d.kind === 'closing') return closeColors[d.closeType] || '#666';
+        if (d.kind === 'ongoing') return ongoingColors[d.closeType] || '#888';
+        return '#ccc';
+    };
+
+    // Helper functions for hover effects
+    const amplifyBinBand = (binIndex, band) => {
+        overviewSvg.selectAll('.overview-stack-segment')
+            .filter(d => d.binIndex === binIndex && d.kind === band)
+            .style('opacity', 1)
+            .attr('stroke', '#333')
+            .attr('stroke-width', 1.5);
+    };
+    const resetBinBand = (binIndex, band) => {
+        overviewSvg.selectAll('.overview-stack-segment')
+            .filter(d => d.binIndex === binIndex && d.kind === band)
+            .style('opacity', 0.85)
+            .attr('stroke', '#ffffff')
+            .attr('stroke-width', 0.5);
+    };
+
+    overviewSvg.selectAll('.overview-stack-segment')
+        .data(segments)
+        .enter()
+        .append('rect')
+        .attr('class', d => `overview-stack-segment overview-${d.kind}`)
+        .attr('x', d => d.x)
+        .attr('y', d => d.y)
+        .attr('width', d => d.width)
+        .attr('height', d => Math.max(0.5, d.height))
+        .attr('fill', getSegmentColor)
+        .attr('stroke', '#ffffff')
+        .attr('stroke-width', 0.5)
+        .style('opacity', 0.85)
+        .style('cursor', 'pointer')
+        .on('mouseover', (event, d) => amplifyBinBand(d.binIndex, d.kind))
+        .on('mouseout', (event, d) => resetBinBand(d.binIndex, d.kind))
+        .on('click', async (event, d) => {
+            // Load actual flows from chunks on demand
+            try {
+                const bin = adaptiveData.bins.find(b => b.binIndex === d.binIndex);
+                const binStart = bin ? bin.start : timeExtent[0];
+                const binEnd = bin ? bin.end : timeExtent[1];
+                console.log(`[AdaptiveOverviewClick] Bin click, loading flows for time range: ${binStart} - ${binEnd}`);
+
+                if (typeof loadPacketBinRef === 'function') {
+                    try { loadPacketBinRef(d.binIndex); } catch (_) {}
+                }
+
+                if (typeof loadChunksForTimeRangeRef === 'function') {
+                    showFlowListModal();
+                    const listContainer = document.getElementById('flowListModalList');
+                    if (listContainer) {
+                        listContainer.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Loading flows...</div>';
+                    }
+
+                    const loadedFlows = await loadChunksForTimeRangeRef(binStart, binEnd);
+                    console.log('[AdaptiveOverviewClick] Loaded flows:', loadedFlows ? loadedFlows.length : 'null');
+
+                    if (typeof createFlowListRef === 'function' && loadedFlows && loadedFlows.length > 0) {
+                        createFlowListRef(loadedFlows);
+                    } else if (listContainer) {
+                        listContainer.innerHTML = '<div style="padding: 20px; text-align: center; color: #999;">No detailed flow data available for this bin.</div>';
+                    }
+                } else {
+                    // No chunk loader available
+                    showFlowListModal();
+                    const listContainer = document.getElementById('flowListModalList');
+                    if (listContainer) {
+                        listContainer.innerHTML = `<div style="padding: 20px; text-align: center; color: #999;">
+                            Bin ${d.binIndex}: ${d.count} ${d.kind} flows<br>
+                            <small>Detailed flow data requires chunk loading</small>
+                        </div>`;
+                    }
+                }
+            } catch (err) {
+                console.error('[AdaptiveOverviewClick] Error:', err);
+            }
+        });
+
+    // Render axis line
+    overviewSvg.append('line')
+        .attr('class', 'overview-axis-line')
+        .attr('x1', 0)
+        .attr('x2', overviewWidth)
+        .attr('y1', axisY)
+        .attr('y2', axisY)
+        .attr('stroke', '#666')
+        .attr('stroke-width', 1);
+
+    // Render time axis (use UTC to match main chart)
+    const xAxis = d3.axisBottom(overviewXScale)
+        .ticks(6)
+        .tickFormat(d => {
+            const date = new Date(d / 1000);
+            return date.toISOString().substring(11, 19);
+        });
+
+    overviewSvg.append('g')
+        .attr('class', 'overview-axis')
+        .attr('transform', `translate(0,${overviewHeight - 5})`)
+        .call(xAxis)
+        .selectAll('text')
+        .style('font-size', '9px');
+
+    // Add resolution indicator
+    overviewSvg.append('text')
+        .attr('class', 'overview-resolution-label')
+        .attr('x', overviewWidth - 5)
+        .attr('y', 12)
+        .attr('text-anchor', 'end')
+        .style('font-size', '9px')
+        .style('fill', '#888')
+        .text(`Resolution: ${adaptiveData.resolution}`);
+
+    // Initialize brush - use narrow band at bottom like original
+    const bandTop = overviewHeight - 4;
+    const bandBottom = overviewHeight;
+
+    const brushed = (event) => {
+        if (isUpdatingFromZoom) return;
+        const sel = event.selection;
+        if (!sel) return;
+        isUpdatingFromBrush = true;
+        const [x0, x1] = sel;
+        const domain = [overviewXScale.invert(x0), overviewXScale.invert(x1)];
+
+        // Update custom brush visualization
+        const lineY = overviewHeight - 1;
+        const custom = overviewSvg.select('.overview-custom');
+        if (custom && !custom.empty()) {
+            custom.select('.overview-window-line').attr('x1', x0).attr('x2', x1);
+            custom.select('.overview-handle.left').attr('cx', x0);
+            custom.select('.overview-handle.right').attr('cx', x1);
+            custom.select('.overview-window-grab').attr('x', x0).attr('width', Math.max(1, x1 - x0));
+        }
+
+        if (applyZoomDomainRef) applyZoomDomainRef(domain, 'brush');
+        isUpdatingFromBrush = false;
+    };
+
+    overviewBrush = d3.brushX()
+        .extent([[0, bandTop], [overviewWidth, bandBottom]])
+        .on('brush end', brushed);
+
+    overviewSvg.append('g').attr('class', 'brush').call(overviewBrush);
+    // Disable pointer events on brush overlay so clicks can pass through to bars
+    overviewSvg.select('.brush .overlay').style('pointer-events', 'none');
+
+    // Initialize brush selection
+    isUpdatingFromZoom = true;
+    try {
+        const currentDomain = getCurrentDomainRef ? getCurrentDomainRef() : null;
+        const domainToUse = (currentDomain && currentDomain[0] !== undefined && currentDomain[1] !== undefined)
+            ? currentDomain
+            : timeExtent;
+        const x0 = Math.max(0, Math.min(overviewWidth, overviewXScale(domainToUse[0])));
+        const x1 = Math.max(0, Math.min(overviewWidth, overviewXScale(domainToUse[1])));
+        overviewSvg.select('.brush').call(overviewBrush.move, [x0, x1]);
+    } catch (e) {
+        try { overviewSvg.select('.brush').call(overviewBrush.move, [0, overviewWidth]); } catch(_) {}
+    } finally {
+        isUpdatingFromZoom = false;
+    }
+
+    // Add custom brush visualization (line + handles)
+    const lineY = overviewHeight - 1;
+    const custom = overviewSvg.append('g').attr('class', 'overview-custom');
+    custom.append('line').attr('class', 'overview-window-line')
+        .attr('x1', 0).attr('x2', overviewWidth).attr('y1', lineY).attr('y2', lineY)
+        .attr('stroke', '#007bff').attr('stroke-width', 3);
+    custom.append('circle').attr('class', 'overview-handle left')
+        .attr('r', 6).attr('cx', 0).attr('cy', lineY)
+        .attr('fill', '#007bff').attr('stroke', '#fff').attr('stroke-width', 2)
+        .style('cursor', 'ew-resize');
+    custom.append('circle').attr('class', 'overview-handle right')
+        .attr('r', 6).attr('cx', overviewWidth).attr('cy', lineY)
+        .attr('fill', '#007bff').attr('stroke', '#fff').attr('stroke-width', 2)
+        .style('cursor', 'ew-resize');
+    custom.append('rect').attr('class', 'overview-window-grab')
+        .attr('x', 0).attr('y', lineY - 8).attr('width', overviewWidth).attr('height', 16)
+        .attr('fill', 'transparent').style('cursor', 'move');
+
+    // Wire up drag interactions for custom handles
+    const getSel = () => d3.brushSelection(overviewSvg.select('.brush').node()) || [0, overviewWidth];
+    const moveBrushTo = (x0, x1) => {
+        x0 = Math.max(0, Math.min(overviewWidth, x0));
+        x1 = Math.max(0, Math.min(overviewWidth, x1));
+        if (x1 <= x0) x1 = Math.min(overviewWidth, x0 + 1);
+        overviewSvg.select('.brush').call(overviewBrush.move, [x0, x1]);
+    };
+    const updateCustomFromSel = () => {
+        const [x0, x1] = getSel();
+        custom.select('.overview-window-line').attr('x1', x0).attr('x2', x1);
+        custom.select('.overview-handle.left').attr('cx', x0);
+        custom.select('.overview-handle.right').attr('cx', x1);
+        custom.select('.overview-window-grab').attr('x', x0).attr('width', Math.max(1, x1 - x0));
+    };
+    updateCustomFromSel();
+
+    custom.select('.overview-handle.left').call(d3.drag().on('drag', (event) => {
+        const x0 = event.x; const [, x1] = getSel(); moveBrushTo(x0, x1); updateCustomFromSel();
+    }));
+    custom.select('.overview-handle.right').call(d3.drag().on('drag', (event) => {
+        const x1 = event.x; const [x0] = getSel(); moveBrushTo(x0, x1); updateCustomFromSel();
+    }));
+    custom.select('.overview-window-grab').call(d3.drag().on('drag', (event) => {
+        const [x0, x1] = getSel(); moveBrushTo(x0 + event.dx, x1 + event.dx); updateCustomFromSel();
+    }));
+
+    console.log(`[OverviewChart] Rendered ${segments.length} segments from adaptive data`);
 }
 
 export function updateOverviewInvalidVisibility() {
