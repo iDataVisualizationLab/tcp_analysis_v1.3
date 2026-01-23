@@ -129,6 +129,7 @@ packets_data/attack_flows_day1to5/
 │   ├── bins.json              # Time bins with total packet counts
 │   ├── flow_bins.json         # Pre-aggregated flows by IP pair (single resolution)
 │   ├── flow_bins_index.json   # Multi-resolution index for adaptive loading
+│   ├── flow_bins_1s.json      # 1-second resolution bins (for zoomed views)
 │   ├── flow_bins_1min.json    # 1-minute resolution bins
 │   ├── flow_bins_10min.json   # 10-minute resolution bins
 │   └── flow_bins_hour.json    # Hourly resolution bins
@@ -178,12 +179,11 @@ The `overview_chart.js` module (~900 LOC) provides:
 **Multi-resolution index** (`flow_bins_index.json`):
 ```json
 {
-  "version": "1.0",
-  "created": "2026-01-21T10:43:00",
   "resolutions": {
-    "hour": { "file": "flow_bins_hour.json", "bin_duration_us": 3600000000 },
-    "10min": { "file": "flow_bins_10min.json", "bin_duration_us": 600000000 },
-    "1min": { "file": "flow_bins_1min.json", "bin_duration_us": 60000000 }
+    "1s": { "file": "flow_bins_1s.json", "bin_width_us": 1000000, "use_when_range_minutes_lte": 10 },
+    "1min": { "file": "flow_bins_1min.json", "bin_width_us": 60000000, "use_when_range_minutes_lte": 120 },
+    "10min": { "file": "flow_bins_10min.json", "bin_width_us": 600000000, "use_when_range_minutes_lte": 7200 },
+    "hour": { "file": "flow_bins_hour.json", "bin_width_us": 3600000000, "use_when_range_minutes_gt": 7200 }
   }
 }
 ```
@@ -216,6 +216,22 @@ The `overview_chart.js` module (~900 LOC) provides:
 - **Instant loading**: Small files vs. thousands of chunk files
 - **Efficient filtering**: Pre-aggregated by IP pair
 - **Reduced memory**: No need to load full flow objects for overview
+
+### Packet Data Multi-Resolution (v3.3)
+
+The `csv-resolution-manager.js` handles zoom-level dependent packet data loading with 7 resolution levels:
+
+| Resolution | Bin Size | Use When Visible Range |
+|------------|----------|------------------------|
+| hours | 1 hour | > 120 minutes |
+| minutes | 1 minute | > 10 minutes |
+| seconds | 1 second | > 1 minute |
+| 100ms | 100ms | > 10 seconds |
+| 10ms | 10ms | > 1 second |
+| 1ms | 1ms | > 100ms |
+| raw | individual packets | ≤ 100ms |
+
+Coarse resolutions (hours, minutes, seconds) use single-file `data.csv` files loaded at initialization. Fine resolutions (100ms, 10ms, 1ms, raw) use chunked files loaded on-demand with LRU caching.
 
 **Generating multi-resolution flow bins**:
 ```bash
