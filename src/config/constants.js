@@ -120,3 +120,13 @@ export const DEFAULT_EVENT_COLORS = {
     'scan /usr/bin/nmap': '#C9A200',
     'ddos': '#264D99'
 };
+
+// === Zoom Button Constants ===
+
+// Zoom step multiplier - how much to zoom in/out per click
+// Value of 10 means 10x zoom (range becomes 1/10th on zoom in, 10x on zoom out)
+export const ZOOM_STEP = 2;
+
+// Minimum visible range in microseconds (1 second)
+// Prevents zooming in beyond this level
+export const MIN_ZOOM_RANGE_US = 1000000;

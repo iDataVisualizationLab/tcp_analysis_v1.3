@@ -57,6 +57,7 @@
             height: 100%;
             display: flex;
             flex-direction: column;
+            position: relative; /* for zoom controls overlay positioning */
         }
         #chart-container {
             flex: 1 1 auto;
@@ -417,6 +418,58 @@
         /* Prevent overlay container from blocking interactions as well */
         #chart-bottom-overlay { pointer-events: none; }
 
+        /* Zoom Controls Overlay on chart */
+        #zoomControlsOverlay {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: rgba(255, 255, 255, 0.95);
+            padding: 6px 10px;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+        #zoomIndicator {
+            text-align: right;
+            font-size: 11px;
+            line-height: 1.3;
+        }
+        #zoomTimeRange {
+            font-weight: bold;
+            color: #2c3e50;
+        }
+        #zoomResolution {
+            color: #666;
+            font-size: 10px;
+        }
+        #zoomButtonsGroup {
+            display: flex;
+            gap: 4px;
+        }
+        #zoomOutBtn, #zoomInBtn {
+            width: 28px;
+            height: 28px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            border: 1px solid #ced4da;
+            border-radius: 4px;
+            background: #f8f9fa;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        #zoomOutBtn:hover, #zoomInBtn:hover {
+            background: #e9ecef;
+        }
+        #zoomOutBtn:disabled, #zoomInBtn:disabled {
+            cursor: not-allowed;
+            opacity: 0.5;
+        }
+
     </style>
 </head>
 <body>
@@ -425,6 +478,17 @@
         <div id="chart-container">
             <div id="chart"></div>
             <div id="loadingMessage"></div>
+        </div>
+        <!-- Zoom controls overlay (outside scrollable area) -->
+        <div id="zoomControlsOverlay">
+            <div id="zoomIndicator">
+                <div id="zoomTimeRange">-</div>
+                <div id="zoomResolution"></div>
+            </div>
+            <div id="zoomButtonsGroup">
+                <button id="zoomInBtn" title="Zoom in">+</button>
+                <button id="zoomOutBtn" title="Zoom out">−</button>
+            </div>
         </div>
         <!-- Bottom overlay: main chart timeline axis + size/flag legends -->
         <div id="chart-bottom-overlay">
@@ -559,13 +623,6 @@
                 <div style="color:#666; font-size:11px; margin-top:6px;">
                     When off, shows individual packets (slower on large ranges).
                 </div>
-            </div>
-        </div>
-        <div class="control-group" id="zoomIndicatorGroup">
-            <label>Zoom Level</label>
-            <div style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
-                <div id="zoomTimeRange" style="font-weight: bold; color: #2c3e50; margin-bottom: 4px;">-</div>
-                <div id="zoomResolution" style="font-size: 11px; color: #666;"></div>
             </div>
         </div>
         <button id="resetView">Reset View</button>

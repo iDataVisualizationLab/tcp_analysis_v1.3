@@ -50,6 +50,7 @@ import {
     applyForceLayoutPositions as applyForceLayoutPositionsBase
 } from './src/layout/barForceLayout.js';
 import { createZoomBehavior, applyZoomDomain as applyZoomDomainFromModule } from './src/interaction/zoom.js';
+import { setupZoomButtons, updateZoomButtonStates } from './src/interaction/zoomButtons.js';
 import { createDragReorderBehavior } from './src/interaction/dragReorder.js';
 import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from './src/interaction/resize.js';
 import {
@@ -657,6 +658,14 @@ function initializeBarVisualization() {
     // Window resize handler for responsive visualization
     setupWindowResizeHandler();
 
+    // Zoom In/Out button handlers (configurable zoom step per click)
+    setupZoomButtons({
+        getXScale: () => xScale,
+        getTimeExtent: () => state.data.timeExtent,
+        applyZoomDomain,
+        setIsHardResetInProgress: (val) => { isHardResetInProgress = val; }
+    });
+
     // Wire Flow List modal controls
     try {
         sbWireFlowListModalControls({
@@ -853,9 +862,6 @@ function setupWindowResizeHandler() {
         onResize: handleResizeLogic
     });
 }
-
-
-
 // Global update functions that preserve zoom state
 let flowUpdateTimeout = null;
 
@@ -2160,6 +2166,12 @@ function updateZoomIndicator(visibleRangeUs, resolution = null, dataPoints = 0) 
     } else if (resEl) {
         resEl.textContent = dataPoints > 0 ? `${dataPoints.toLocaleString()} points` : '';
     }
+
+    // Update zoom button states when zoom level changes
+    updateZoomButtonStates({
+        getXScale: () => xScale,
+        getTimeExtent: () => state.data.timeExtent
+    });
 }
 
 // Wrapper for exportFlowToCSV that provides the state.data.full and helpers
