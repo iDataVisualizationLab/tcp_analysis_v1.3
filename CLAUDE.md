@@ -221,10 +221,14 @@ The `overview_chart.js` module (~900 LOC) provides:
 
 ### Flow List CSV Files (Lazy Loading)
 
-For deployments where chunk files are too large (e.g., GitHub Pages), generate per-IP-pair CSV files that contain flow summaries without packet arrays:
+For deployments where chunk files are too large (e.g., GitHub Pages), generate per-IP-pair CSV files. Two scripts are available:
 
 ```bash
+# Summary only (no packet data) - smaller files
 python packets_data/generate_flow_list.py --input-dir packets_data/attack_flows_day1to5
+
+# With embedded packet data (fp column) - enables "View Packets" button
+python packets_data/generate_flow_data.py --input-dir packets_data/attack_flows_day1to5
 ```
 
 **Output Structure**:
@@ -241,7 +245,7 @@ indices/flow_list/
 {
   "version": "1.1",
   "format": "flow_list_csv",
-  "columns": ["src", "dst", "st", "et", "p", "sp", "dp", "ct", "ir"],
+  "columns": ["d", "st", "et", "p", "sp", "dp", "ct", "fp"],
   "total_flows": 5482939,
   "total_pairs": 574,
   "unique_ips": 294,
@@ -252,12 +256,24 @@ indices/flow_list/
 }
 ```
 
-**CSV Format** (columns: src, dst, st, et, p, sp, dp, ct, ir):
+**CSV Format** (with embedded packet data):
 ```csv
-src,dst,st,et,p,sp,dp,ct,ir
-172.28.4.7,192.168.1.1,1257254652674641,1257254652800000,42,54321,80,graceful,
-15.231.243.19,172.28.4.7,1257257931810544,1257257931810544,1,5085,80,invalid,incomplete_no_synack
+d,st,et,p,sp,dp,ct,fp
+0,1257254652674641,125359,3,54321,80,invalid_ack,"0:60:2:1:3527673088:0,159:60:18:0:1869397623:3527673089,578:60:16:1:3527673089:1869397624"
 ```
+
+- `d`: Initiator direction (0 = first IP alphabetically, 1 = second). IPs derived from filename.
+- `st`: Start time (absolute microseconds)
+- `et`: Duration in microseconds (end_time = st + et)
+- `ct`: Close type (graceful/abortive/ongoing) or invalid reason (invalid_ack, rst_during_handshake, etc.)
+
+The `fp` column contains embedded packet data: `delta_ts:length:flags:dir:seq:ack,...`
+- `delta_ts`: Microseconds relative to flow start time
+- `length`: Packet size in bytes
+- `flags`: TCP flags (numeric value)
+- `dir`: Direction (1 = initiator→responder, 0 = responder→initiator)
+- `seq`: Absolute sequence number
+- `ack`: Absolute acknowledgment number
 
 **Lazy Loading Behavior**:
 - On page load: Only `index.json` is fetched (~87KB)
@@ -266,12 +282,13 @@ src,dst,st,et,p,sp,dp,ct,ir
 - Loaded CSVs are cached in memory for subsequent requests
 
 **Key Files**:
-- `src/data/flow-list-loader.js` - FlowListLoader class for parsing/caching CSVs
+- `src/data/flow-list-loader.js` - FlowListLoader class for parsing/caching CSVs with `fp` column support
 - `src/data/flow-loader.js` - Decision tree that defers loading when FlowListLoader available
 
 **When flow_list CSVs are present**:
 - Flow list popup works without loading chunk files
-- "View Packets" and "Export CSV" buttons are disabled (no packet data)
+- If `fp` column present: "View Packets" visualizes embedded packet data (no chunk files needed)
+- If `fp` column absent: "View Packets" and "Export CSV" buttons are disabled
 - Overview chart still uses adaptive flow_bins for visualization
 - CSV format is ~45% smaller than JSON; all files under GitHub's 100MB limit
 

@@ -2192,8 +2192,11 @@ const createFlowList = (flows) => {
         )
     );
 
-    // Packet data available if flows have phases OR if we have CSV data
-    const hasPacketData = flowsHavePacketData || (state.data.full && state.data.full.length > 0);
+    // Check if any flow has embedded packet data from flow_list CSV (fp column)
+    const flowsHaveEmbeddedPackets = flows.length > 0 && flows.some(f => f._hasEmbeddedPackets);
+
+    // Packet data available if flows have phases, embedded packets, OR if we have CSV data
+    const hasPacketData = flowsHavePacketData || flowsHaveEmbeddedPackets || (state.data.full && state.data.full.length > 0);
 
     return sbCreateFlowListCapped(flows, state.flows.selectedIds, formatBytes, formatTimestamp, exportFlowToCSV, zoomToFlow, updateTcpFlowPacketsGlobal, flowColors, enterFlowDetailMode, hasPacketData);
 };
@@ -2793,9 +2796,21 @@ async function enterFlowDetailMode(flowSummary) {
 
     try {
         let fullFlow = null;
+        let packets = null;
 
-        // Try File System API first (folder_integration.js)
-        if (typeof getChunkedFlowState === 'function') {
+        // First, check if the flow has embedded packet data (from flow_list CSV with fp column)
+        if (flowSummary._hasEmbeddedPackets && flowSummary._embeddedPackets) {
+            console.log('[FlowDetail] Using embedded packet data from flow_list CSV');
+            const flowListLoader = getFlowListLoader();
+            fullFlow = flowListLoader.buildFullFlow(flowSummary);
+            if (fullFlow) {
+                packets = flowSummary._embeddedPackets;
+                console.log(`[FlowDetail] Built flow from ${packets.length} embedded packets`);
+            }
+        }
+
+        // Try File System API if no embedded packets (folder_integration.js)
+        if (!fullFlow && typeof getChunkedFlowState === 'function') {
             const chunkedState = getChunkedFlowState();
             if (chunkedState && typeof loadFlowDetailWithPackets === 'function') {
                 console.log('[FlowDetail] Using File System API to load flow detail');
@@ -2812,12 +2827,14 @@ async function enterFlowDetailMode(flowSummary) {
         if (!fullFlow) {
             console.error('[FlowDetail] Failed to load flow detail - no loader available');
             hideFlowDetailLoading(loadingIndicator);
-            alert('Unable to load flow detail. Please ensure a flows folder is loaded.');
+            alert('Unable to load flow detail. Please ensure a flows folder is loaded or flow list has packet data.');
             return;
         }
 
-        // Extract packets from phases (use local function if folder_integration not available)
-        const packets = extractPacketsFromFlowLocal(fullFlow);
+        // Extract packets from phases if not already set from embedded data
+        if (!packets) {
+            packets = extractPacketsFromFlowLocal(fullFlow);
+        }
         if (!packets || packets.length === 0) {
             console.warn('[FlowDetail] No packets found in flow');
             hideFlowDetailLoading(loadingIndicator);
