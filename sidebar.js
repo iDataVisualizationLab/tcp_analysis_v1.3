@@ -310,12 +310,15 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
             item.dataset.flowId = String(flow.id);
             item.style.borderLeft = `4px solid ${color}`;
 
-            // Build button HTML based on whether packet data is available
-            const viewBtnHTML = hasPacketData
+            // Check if this specific flow has packet data (embedded or global)
+            const flowHasPacketData = hasPacketData || flow._hasEmbeddedPackets;
+
+            // Build button HTML based on whether packet data is available for this flow
+            const viewBtnHTML = flowHasPacketData
                 ? `<button class=\"flow-view-btn\" data-flow-id=\"${flow.id}\" style=\"padding:2px 8px; font-size:10px; border:1px solid #2196F3; border-radius:3px; background:#2196F3; color:white; cursor:pointer; font-weight:bold;\" title=\"View packets with arcs\">📊 View Packets</button>`
                 : `<button class=\"flow-view-btn\" data-flow-id=\"${flow.id}\" style=\"padding:2px 8px; font-size:10px; border:1px solid #ccc; border-radius:3px; background:#eee; color:#999; cursor:not-allowed; font-weight:bold;\" title=\"Packet data not available (summary mode)\" disabled>📊 View Packets</button>`;
 
-            const exportBtnHTML = hasPacketData
+            const exportBtnHTML = flowHasPacketData
                 ? `<button class=\"flow-export-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ced4da; border-radius:3px; background:#fff; cursor:pointer;\">Export CSV</button>`
                 : `<button class=\"flow-export-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ccc; border-radius:3px; background:#eee; color:#999; cursor:not-allowed;\" title=\"Packet data not available (summary mode)\" disabled>Export CSV</button>`;
 

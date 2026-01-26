@@ -22,7 +22,15 @@ export function createTooltipHTML(data) {
         const { utcTime } = formatTimestamp(data.timestamp);
         let tooltipContent = `<b>${data.flagType} (Binned)</b><br>`;
         tooltipContent += `Count: ${data.count} packets<br>`;
-        tooltipContent += `From: ${data.src_ip}<br>To: ${data.dst_ip}<br>`;
+
+        // Show IP:port format
+        const srcPort = data.src_port ?? data.srcPort;
+        const dstPort = data.dst_port ?? data.dstPort;
+        if (srcPort !== undefined && dstPort !== undefined) {
+            tooltipContent += `From: ${data.src_ip}:${srcPort}<br>To: ${data.dst_ip}:${dstPort}<br>`;
+        } else {
+            tooltipContent += `From: ${data.src_ip}<br>To: ${data.dst_ip}<br>`;
+        }
 
         if (data.originalPackets && data.originalPackets.length) {
             const protocols = Array.from(new Set(data.originalPackets.map(extractProtocol)));
@@ -52,9 +60,23 @@ export function createTooltipHTML(data) {
         const packet = data.originalPackets ? data.originalPackets[0] : data;
         const { utcTime } = formatTimestamp(packet.timestamp);
         let tooltipContent = `<b>${classifyFlags(packet.flags)}</b><br>`;
-        tooltipContent += `From: ${packet.src_ip}<br>To: ${packet.dst_ip}<br>`;
+
+        // Show IP:port format
+        const srcPort = packet.src_port ?? packet.srcPort;
+        const dstPort = packet.dst_port ?? packet.dstPort;
+        if (srcPort !== undefined && dstPort !== undefined) {
+            tooltipContent += `From: ${packet.src_ip}:${srcPort}<br>To: ${packet.dst_ip}:${dstPort}<br>`;
+        } else {
+            tooltipContent += `From: ${packet.src_ip}<br>To: ${packet.dst_ip}<br>`;
+        }
+
         tooltipContent += `Protocol: ${extractProtocol(packet)}<br>`;
         tooltipContent += `Time: ${utcTime}`;
+
+        // Show packet length/size if available
+        if (packet.length !== undefined) {
+            tooltipContent += `<br>Size: ${formatBytes(packet.length)}`;
+        }
 
         if (packet.seq_num !== undefined && packet.seq_num !== null) {
             tooltipContent += `<br>Seq: ${packet.seq_num}`;

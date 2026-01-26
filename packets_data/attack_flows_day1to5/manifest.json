@@ -1,7 +1,7 @@
 {
   "version": "3.0",
   "format": "chunked_flows_by_ip_pair",
-  "created": "2026-01-20T03:09:28.423855",
+  "created": "2026-01-25T17:36:20.131753",
   "source_file": "attack_packets_first5days.csv",
   "source_files": [
     "attack_packets_first5days.csv"
@@ -9,10 +9,10 @@
   "total_packets": 24469142,
   "tcp_packets": 24042521,
   "unique_ips": 294,
-  "total_flows": 5482939,
+  "total_flows": 5502429,
   "total_ip_pairs": 574,
-  "chunk_size_mb": 10.0,
-  "total_chunks": 1318,
+  "chunk_size_mb": 1.0,
+  "total_chunks": 8255,
   "time_range": {
     "start": 1257254652674641,
     "end": 1257654102004202,
