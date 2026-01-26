@@ -258,22 +258,20 @@ indices/flow_list/
 
 **CSV Format** (with embedded packet data):
 ```csv
-d,st,et,p,sp,dp,ct,fp
-0,1257254652674641,125359,3,54321,80,invalid_ack,"0:60:2:1:3527673088:0,159:60:18:0:1869397623:3527673089,578:60:16:1:3527673089:1869397624"
+start_time,src_port,dst_port,close_type,packets
+1257254652674641,54321,80,invalid_ack,"0:2:1,159:18:0,578:16:1"
 ```
 
-- `d`: Initiator direction (0 = first IP alphabetically, 1 = second). IPs derived from filename.
-- `st`: Start time (absolute microseconds)
-- `et`: Duration in microseconds (end_time = st + et)
-- `ct`: Close type (graceful/abortive/ongoing) or invalid reason (invalid_ack, rst_during_handshake, etc.)
+- `start_time`: Start time (absolute microseconds)
+- `close_type`: Close type (graceful/abortive/ongoing) or invalid reason (invalid_ack, rst_during_handshake, etc.)
 
-The `fp` column contains embedded packet data: `delta_ts:length:flags:dir:seq:ack,...`
+The `packets` column contains embedded packet data: `delta_ts:flags:dir,...`
 - `delta_ts`: Microseconds relative to flow start time
-- `length`: Packet size in bytes
 - `flags`: TCP flags (numeric value)
-- `dir`: Direction (1 = initiator→responder, 0 = responder→initiator)
-- `seq`: Absolute sequence number
-- `ack`: Absolute acknowledgment number
+- `dir`: Direction (1 = ip1→ip2, 0 = ip2→ip1) based on alphabetical IP order from filename
+- Initiator = first packet's dir (dir=1 means ip1 initiated, dir=0 means ip2 initiated)
+- Packet count = number of comma-separated entries
+- Duration = last packet's delta_ts (end_time = start_time + last delta_ts)
 
 **Lazy Loading Behavior**:
 - On page load: Only `index.json` is fetched (~87KB)

@@ -1,198 +1,137 @@
 // src/data/flow-list-loader.js
 // Loads flow_list CSV files for flow list popup with embedded packet data
 
-/**
- * Infer packet direction based on TCP flags and flow state
- * Returns true if packet is from initiator to responder, false otherwise
- *
- * TCP Handshake:
- *   1. SYN (initiator → responder)
- *   2. SYN+ACK (responder → initiator)
- *   3. ACK (initiator → responder)
- *
- * @param {number} flags - TCP flags
- * @param {Object} state - Mutable state object tracking handshake progress
- * @returns {boolean} true if initiator→responder, false if responder→initiator
- */
-function inferPacketDirection(flags, state) {
-    const SYN = 0x02;
-    const ACK = 0x10;
-    const FIN = 0x01;
-    const RST = 0x04;
-    const PSH = 0x08;
-
-    const isSyn = (flags & SYN) !== 0;
-    const isAck = (flags & ACK) !== 0;
-    const isFin = (flags & FIN) !== 0;
-    const isRst = (flags & RST) !== 0;
-    const isPsh = (flags & PSH) !== 0;
-
-    // SYN without ACK = initiator starting connection
-    if (isSyn && !isAck) {
-        state.handshakeStep = 1;
-        state.lastDirection = true; // initiator → responder
-        return true;
-    }
-
-    // SYN+ACK = responder responding
-    if (isSyn && isAck) {
-        state.handshakeStep = 2;
-        state.lastDirection = false; // responder → initiator
-        return false;
-    }
-
-    // After SYN+ACK, first ACK-only completes handshake (from initiator)
-    if (state.handshakeStep === 2 && isAck && !isSyn && !isFin && !isRst && !isPsh) {
-        state.handshakeStep = 3;
-        state.lastDirection = true;
-        return true;
-    }
-
-    // RST can come from either side - alternate from last
-    if (isRst) {
-        state.lastDirection = !state.lastDirection;
-        return state.lastDirection;
-    }
-
-    // FIN packets - first FIN could be from either side, subsequent alternate
-    if (isFin) {
-        if (!state.finSeen) {
-            state.finSeen = true;
-            // First FIN - could be from either side, use heuristic
-            state.lastDirection = !state.lastDirection;
-        } else {
-            state.lastDirection = !state.lastDirection;
-        }
-        return state.lastDirection;
-    }
-
-    // Data packets (PSH+ACK or just ACK) - alternate direction
-    // This is a simplification; real flows may have multiple packets in same direction
-    state.lastDirection = !state.lastDirection;
-    return state.lastDirection;
-}
+// Close type decoding - matches CLOSE_TYPE_ENCODING in generate_flow_data.py
+const CLOSE_TYPE_DECODING = [
+    '',                      // 0
+    'graceful',              // 1
+    'abortive',              // 2
+    'ongoing',               // 3
+    'rst_during_handshake',  // 4
+    'invalid_ack',           // 5
+    'invalid_synack',        // 6
+    'incomplete_no_synack',  // 7
+    'incomplete_no_ack',     // 8
+    'unknown_invalid',       // 9
+];
 
 /**
- * Parse the fp (flow packets) column into an array of packet objects
- * Format: delta_ts:length:flags:dir:seq:ack,...
- * dir: 1=initiator->responder, 0=responder->initiator
- * seq/ack: absolute sequence and acknowledgment numbers
+ * Parse the packets column into an array of packet objects
+ * Format: delta_ts:flags:dir,...
+ * dir: 1=ip1->ip2, 0=ip2->ip1 (based on alphabetical IP order from filename)
+ * First packet's dir determines initiator: dir=1 means ip1 initiated, dir=0 means ip2 initiated
+ * Note: length, seq, ack not included for now
  *
- * @param {string} fpString - The fp column value
+ * @param {string} packetsString - The packets column value
  * @param {number} flowStartTime - The flow's start time in microseconds
- * @param {Object} flowMeta - Flow metadata (initiator, responder, ports)
- * @returns {Array} Array of packet objects
+ * @param {string} ip1 - First IP (alphabetically) from filename
+ * @param {string} ip2 - Second IP (alphabetically) from filename
+ * @param {number} initiatorPort - Initiator's port
+ * @param {number} responderPort - Responder's port
+ * @returns {Object} { packets: Array, initiator: string, responder: string }
  */
-function parseFlowPackets(fpString, flowStartTime, flowMeta) {
-    if (!fpString || typeof fpString !== 'string' || fpString.trim() === '') {
-        return [];
+function parseFlowPackets(packetsString, flowStartTime, ip1, ip2, initiatorPort, responderPort) {
+    if (!packetsString || typeof packetsString !== 'string' || packetsString.trim() === '') {
+        return { packets: [], initiator: ip1, responder: ip2 };
+    }
+
+    const parts = packetsString.split(',');
+
+    // Determine initiator from first packet's dir
+    // First packet (SYN) is from initiator, so its dir tells us which IP initiated
+    let initiator = ip1;
+    let responder = ip2;
+    if (parts.length > 0) {
+        const firstFields = parts[0].trim().split(':');
+        const firstDir = firstFields[2];
+        if (firstDir === '0') {
+            // First packet is from ip2, so ip2 is initiator
+            initiator = ip2;
+            responder = ip1;
+        }
     }
 
     const packets = [];
-    const parts = fpString.split(',');
-
-    // State for tracking TCP direction (fallback when dir not in CSV)
-    const directionState = {
-        handshakeStep: 0,
-        lastDirection: true, // true = initiator→responder
-        finSeen: false
-    };
-
     for (let i = 0; i < parts.length; i++) {
         const part = parts[i].trim();
         if (!part) continue;
 
         const fields = part.split(':');
         const delta = parseInt(fields[0], 10) || 0;
-        const length = parseInt(fields[1], 10) || 0;
-        const flags = parseInt(fields[2], 10) || 0;
+        const flags = parseInt(fields[1], 10) || 0;
+        const isFromIp1 = fields[2] === '1';
 
-        // Use explicit direction if present (4th field), otherwise infer from flags
-        let isFromInitiator;
-        if (fields.length >= 4) {
-            // Explicit direction from CSV: 1 = initiator->responder, 0 = responder->initiator
-            isFromInitiator = fields[3] === '1';
-        } else {
-            // Fallback: infer direction based on TCP flags (for old CSV format)
-            isFromInitiator = inferPacketDirection(flags, directionState);
-        }
-
-        // Parse absolute seq/ack values
-        let seq_num = null;
-        let ack_num = null;
-
-        if (fields.length >= 6) {
-            seq_num = parseInt(fields[4], 10) || 0;
-            ack_num = parseInt(fields[5], 10) || 0;
-        }
+        // Determine if packet is from initiator
+        const isFromInitiator = (initiator === ip1) ? isFromIp1 : !isFromIp1;
 
         // Set src/dst based on direction
-        const src_ip = isFromInitiator ? flowMeta.initiator : flowMeta.responder;
-        const dst_ip = isFromInitiator ? flowMeta.responder : flowMeta.initiator;
-        const src_port = isFromInitiator ? flowMeta.initiatorPort : flowMeta.responderPort;
-        const dst_port = isFromInitiator ? flowMeta.responderPort : flowMeta.initiatorPort;
+        const src_ip = isFromIp1 ? ip1 : ip2;
+        const dst_ip = isFromIp1 ? ip2 : ip1;
+        const src_port = isFromInitiator ? initiatorPort : responderPort;
+        const dst_port = isFromInitiator ? responderPort : initiatorPort;
 
         packets.push({
             timestamp: flowStartTime + delta,
-            length: length,
             flags: flags,
             src_ip: src_ip,
             dst_ip: dst_ip,
             src_port: src_port,
             dst_port: dst_port,
-            seq_num: seq_num,
-            ack_num: ack_num,
+            // length, seq_num, ack_num not included for now
+            length: 0,
+            seq_num: null,
+            ack_num: null,
             _index: i,
             _fromInitiator: isFromInitiator
         });
     }
 
-    return packets;
+    return { packets, initiator, responder };
 }
 
 /**
  * Parse a CSV row into a flow object
- * CSV columns: d,st,et,p,sp,dp,ct,fp
- * Note: d is direction flag (0 = first IP alphabetically is initiator, 1 = second)
- * Note: et is stored as duration (delta), not absolute end time
- * Note: ct contains close type (graceful/abortive/ongoing) or invalid reason directly
+ * CSV columns: start_time,src_port,dst_port,close_type,packets
+ * Note: close_type contains close type (graceful/abortive/ongoing) or invalid reason directly
+ * Note: packet_count, duration, and initiator derived from packets column
  * @param {string[]} row - CSV row fields
  * @param {number} index - Row index for ID
  * @param {string} ip1 - First IP (alphabetically) from filename
  * @param {string} ip2 - Second IP (alphabetically) from filename
  */
 function parseFlowRow(row, index, ip1, ip2) {
-    const [d, st, et, p, sp, dp, ct, fp] = row;
-    const direction = parseInt(d, 10) || 0;
-    const startTime = parseInt(st, 10);
-    const duration = parseInt(et, 10) || 0;
-    const endTime = startTime + duration;  // Reconstruct absolute end time
-    const initiatorPort = parseInt(sp, 10) || 0;
-    const responderPort = parseInt(dp, 10) || 0;
+    const [start_time, src_port, dst_port, close_type, packets] = row;
+    const startTime = parseInt(start_time, 10);
+    const initiatorPort = parseInt(src_port, 10) || 0;
+    const responderPort = parseInt(dst_port, 10) || 0;
 
-    // Derive initiator/responder from direction flag and IP pair
-    const initiator = direction === 0 ? ip1 : ip2;
-    const responder = direction === 0 ? ip2 : ip1;
+    // Parse embedded packets - also determines initiator/responder from first packet's dir
+    const parseResult = packets
+        ? parseFlowPackets(packets, startTime, ip1, ip2, initiatorPort, responderPort)
+        : { packets: [], initiator: ip1, responder: ip2 };
 
-    // Parse embedded packets if fp column exists
-    const flowMeta = {
-        initiator: initiator,
-        responder: responder,
-        initiatorPort: initiatorPort,
-        responderPort: responderPort
-    };
-    const embeddedPackets = fp ? parseFlowPackets(fp, startTime, flowMeta) : [];
+    const embeddedPackets = parseResult.packets;
+    const initiator = parseResult.initiator;
+    const responder = parseResult.responder;
+
+    // Derive endTime from last packet's timestamp
+    const endTime = embeddedPackets.length > 0
+        ? embeddedPackets[embeddedPackets.length - 1].timestamp
+        : startTime;
 
     // Calculate total bytes from embedded packets if available
     const totalBytes = embeddedPackets.length > 0
         ? embeddedPackets.reduce((sum, pkt) => sum + pkt.length, 0)
         : 0;
 
-    // ct contains either close type (graceful/abortive/ongoing) or invalid reason
-    const normalCloseTypes = ['graceful', 'abortive', 'ongoing', ''];
-    const isInvalid = ct && !normalCloseTypes.includes(ct);
-    const closeType = isInvalid ? 'invalid' : (ct || '');
-    const invalidReason = isInvalid ? ct : '';
+    // Decode close_type from integer
+    const closeTypeCode = parseInt(close_type, 10) || 0;
+    const closeTypeStr = CLOSE_TYPE_DECODING[closeTypeCode] || '';
+
+    // Determine if invalid (codes 4-9 are invalid reasons)
+    const isInvalid = closeTypeCode >= 4;
+    const closeTypeValue = isInvalid ? 'invalid' : closeTypeStr;
+    const invalidReason = isInvalid ? closeTypeStr : '';
 
     return {
         id: index,
@@ -200,25 +139,23 @@ function parseFlowRow(row, index, ip1, ip2) {
         responder: responder,
         startTime: startTime,
         endTime: endTime,
-        totalPackets: parseInt(p, 10),
+        totalPackets: embeddedPackets.length,  // Derived from packets column
         initiatorPort: initiatorPort,
         responderPort: responderPort,
-        closeType: closeType,
+        closeType: closeTypeValue,
         invalidReason: invalidReason,
         // Derived fields for compatibility
         totalBytes: totalBytes,
-        state: isInvalid ? 'invalid' : (ct ? 'closed' : 'unknown'),
-        establishmentComplete: closeType === 'graceful' || closeType === 'abortive',
-        // Embedded packet data from fp column
+        state: isInvalid ? 'invalid' : (closeTypeStr ? 'closed' : 'unknown'),
+        establishmentComplete: closeTypeValue === 'graceful' || closeTypeValue === 'abortive',
+        // Embedded packet data from packets column
         _embeddedPackets: embeddedPackets,
-        _hasEmbeddedPackets: embeddedPackets.length > 0,
-        // Store raw fp for debugging
-        _fpRaw: fp || ''
+        _hasEmbeddedPackets: embeddedPackets.length > 0
     };
 }
 
 /**
- * Parse a CSV line handling quoted fields (for fp column with commas)
+ * Parse a CSV line handling quoted fields (for packets column with commas)
  * @param {string} line - CSV line
  * @returns {string[]} Array of field values
  */
@@ -251,7 +188,7 @@ function parseCSVLine(line) {
 
 /**
  * Parse CSV text into array of flow objects
- * Handles the fp column which contains comma-separated packet data (quoted)
+ * Handles the packets column which contains comma-separated packet data (quoted)
  * @param {string} csvText - CSV file content
  * @param {string} ip1 - First IP (alphabetically) from filename
  * @param {string} ip2 - Second IP (alphabetically) from filename
@@ -367,7 +304,7 @@ export class FlowListLoader {
             }
 
             this.loaded = true;
-            const hasFpColumn = this.index.columns && this.index.columns.includes('fp');
+            const hasPacketsColumn = this.index.columns && this.index.columns.includes('packets');
             const uniquePairs = this.pairsByKey.size;
             const splitPairs = [...this.pairsByKey.values()].filter(p => p.files.length > 1).length;
 
@@ -376,10 +313,10 @@ export class FlowListLoader {
             if (splitPairs > 0) {
                 console.log(`[FlowListLoader]   ${splitPairs} pairs split into multiple files`);
             }
-            if (hasFpColumn) {
-                console.log(`[FlowListLoader] ✓ fp column detected - embedded packet data available for visualization`);
+            if (hasPacketsColumn) {
+                console.log(`[FlowListLoader] ✓ packets column detected - embedded packet data available for visualization`);
             } else {
-                console.log(`[FlowListLoader] No fp column - packet visualization will require chunk files`);
+                console.log(`[FlowListLoader] No packets column - packet visualization will require chunk files`);
             }
             return true;
 
@@ -520,7 +457,7 @@ export class FlowListLoader {
         if (flowsWithPackets > 0) {
             console.log(`[FlowListLoader] ✓ Loaded ${allFlows.length} flows from ${fileDesc} (${flowsWithPackets} with embedded packets, ${totalPackets} total packets)`);
         } else {
-            console.log(`[FlowListLoader] Loaded ${allFlows.length} flows from ${fileDesc} (no fp column data)`);
+            console.log(`[FlowListLoader] Loaded ${allFlows.length} flows from ${fileDesc} (no packets column data)`);
         }
         return allFlows;
     }
@@ -589,8 +526,7 @@ export class FlowListLoader {
      */
     hasEmbeddedPackets() {
         if (!this.metadata || !this.metadata.columns) return false;
-        // Check if 'fp' column is in the index metadata
-        return this.metadata.columns.includes('fp');
+        return this.metadata.columns.includes('packets');
     }
 
     /**

@@ -169,9 +169,10 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
         return;
     }
 
-    // Sort flows
-    const sorted = [...flows].sort((a, b) => a.startTime - b.startTime);
-    const total = sorted.length;
+    // Sort flows in-place (avoids creating a copy - safe since callers pass new arrays)
+    // If already sorted (e.g., from filterByIPs), this is O(n)
+    flows.sort((a, b) => a.startTime - b.startTime);
+    const total = flows.length;
     const flowsPerPage = MAX_FLOW_LIST_ITEMS || 500;
     const totalPages = Math.ceil(total / flowsPerPage);
 
@@ -180,12 +181,12 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
         container._paginationState = {
             currentPage: 1,
             totalPages: totalPages,
-            flows: sorted,
+            flows: flows,
             flowsPerPage: flowsPerPage
         };
     } else {
         // Update state with new flows
-        container._paginationState.flows = sorted;
+        container._paginationState.flows = flows;
         container._paginationState.totalPages = totalPages;
         container._paginationState.flowsPerPage = flowsPerPage;
         // Reset to page 1 if current page is beyond new total
@@ -197,7 +198,7 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
     const state = container._paginationState;
     const startIndex = (state.currentPage - 1) * flowsPerPage;
     const endIndex = Math.min(startIndex + flowsPerPage, total);
-    const currentPageFlows = sorted.slice(startIndex, endIndex);
+    const currentPageFlows = flows.slice(startIndex, endIndex);
 
     // Clear container and create pagination UI
     container.innerHTML = '';
