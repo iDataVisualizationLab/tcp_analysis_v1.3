@@ -33,26 +33,25 @@
         <span>Attack Group</span>
       </label>
     </fieldset>
-    <button id="lensingToggle" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Toggle lensing mode (Shift + L)">
-      <span>🔍 Lensing</span>
-      <span style="font-size:10px; opacity:0.7; margin-left:4px;">(⇧L)</span>
+    <button id="lensingToggle" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Toggle fisheye lens effect (Shift+L)">
+      <span>🔍 Fisheye Lens</span>
     </button>
-    <button id="resetFisheyeBtn" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Reset fisheye effect to original positions">
+    <button id="resetFisheyeBtn" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Reset to original positions">
       <span>↺ Reset</span>
     </button>
     <div style="display:flex; align-items:center; gap:8px; padding:4px 8px; border:1px solid #dee2e6; border-radius:4px;">
-      <label for="lensingMulSlider" style="font-size:12px; font-weight:600; white-space:nowrap;">Zoom:</label>
-      <input type="range" id="lensingMulSlider" min="2" max="100" step="1" value="5" style="width:100px; cursor:pointer;" />
+      <label for="lensingMulSlider" style="font-size:12px; font-weight:600; white-space:nowrap;">Lens Power:</label>
+      <input type="range" id="lensingMulSlider" min="2" max="20" step="0.5" value="5" style="width:100px; cursor:pointer;" />
       <span id="lensingMulValue" style="font-size:12px; min-width:24px; text-align:right;">5x</span>
     </div>
     <div id="fisheyeModeIndicator" style="display:none; font-size:11px; padding:4px 8px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; font-weight:600; color:#495057;">
       <span id="fisheyeModeText">Both Axes</span>
     </div>
     <div style="border-left: 2px solid #dee2e6; height: 30px; margin: 0 4px;"></div>
-    <button id="brushToggle" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Enable brush selection to export data (Shift + B)">
-      <span>📐 Enable Brush</span>
-      <span style="font-size:10px; opacity:0.7; margin-left:4px;">(⇧B)</span>
-    </button>
+    <div id="brushStatus" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#f8f9fa; font-size:12px; font-weight:600; display:flex; align-items:center; gap:4px;" title="Click and drag on empty space to select arcs">
+      <span>📐</span>
+      <span id="brushStatusText">Drag to select</span>
+    </div>
     <button id="clearBrush" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Clear brush selection">
       <span>✕ Clear</span>
     </button>
@@ -65,7 +64,7 @@
       <span style="opacity:0.7; margin-left:4px;">(<span id="componentIPCount">0</span> IPs)</span>
     </div>
     <div class="hint" style="margin-left: auto;">
-      💡 Press <kbd style="padding:2px 6px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:3px; font-size:11px; font-family:monospace;">Shift + L</kbd> to toggle lensing | <kbd style="padding:2px 6px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:3px; font-size:11px; font-family:monospace;">Shift + B</kbd> for brush | 🔍 Top edge: horizontal zoom, Left edge: vertical zoom
+      💡 Press <kbd style="padding:2px 6px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:3px; font-size:11px; font-family:monospace;">Shift + L</kbd> to toggle lensing | 📐 Click &amp; drag to select arcs | 🔍 Top edge: horizontal zoom, Left edge: vertical zoom
     </div>
   </div>
   <main>
@@ -96,6 +95,6 @@
     </div>
   </main>
   <div id="tooltip" class="tooltip"></div>
-  <script type="module" src="./attack_timearcs2.js"></script>
+  <script type="module" src="./attack_timearcs.js"></script>
   </body>
   </html>

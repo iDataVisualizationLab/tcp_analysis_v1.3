@@ -32,7 +32,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   const lensingMulSlider = document.getElementById('lensingMulSlider');
   const lensingMulValue = document.getElementById('lensingMulValue');
   const lensingToggleBtn = document.getElementById('lensingToggle');
-  const brushToggleBtn = document.getElementById('brushToggle');
+  const brushStatusEl = document.getElementById('brushStatus');
+  const brushStatusText = document.getElementById('brushStatusText');
   const exportSelectionBtn = document.getElementById('exportSelection');
   const clearBrushBtn = document.getElementById('clearBrush');
   const fisheyeModeIndicator = document.getElementById('fisheyeModeIndicator');
@@ -105,11 +106,16 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   let labelMode = 'attack';
   
   // Brush selection state
-  let brushEnabled = false;
+  // Brush is always available - user can click and drag anywhere to select
   let brushSelection = null; // Current brush selection {x0, y0, x1, y1}
   let selectedArcs = []; // Arcs within brush selection
   let selectedIps = new Set(); // IPs involved in selection
   let selectionTimeRange = null; // {min, max} in data units
+
+  // Drag detection for brush vs hover
+  const DRAG_THRESHOLD = 8; // pixels before drag is recognized as brush intent
+  let dragStart = null; // {x, y} of mousedown
+  let isDragging = false; // true when drag exceeds threshold
 
   // Multiple brush selections support
   let multiSelectionsGroup = null; // SVG group for persistent selections
@@ -144,6 +150,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     if (lastRawCsvRows) {
       // Reset to show all data when switching label modes
       originalData = null; // Force re-storing of original data
+      cachedOriginalLinks = null; // Clear cached links
       visibleAttacks.clear(); // Clear visible attacks so render() re-initializes
       render(rebuildDataFromRawRows(lastRawCsvRows));
     }
@@ -227,57 +234,19 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
       updateLensingButtonState();
     }
-    
-    // Check for Shift + B to toggle brush
-    if (e.shiftKey && (e.key === 'B' || e.key === 'b')) {
-      e.preventDefault();
-      if (brushToggleBtn) {
-        brushToggleBtn.click();
-      }
-    }
   });
 
-  // Handle brush toggle button
-  function updateBrushButtonState() {
-    if (!brushToggleBtn) return;
-    if (brushEnabled) {
-      brushToggleBtn.style.background = '#28a745';
-      brushToggleBtn.style.color = '#fff';
-      brushToggleBtn.style.borderColor = '#28a745';
-      brushToggleBtn.textContent = '✓ Brush Active';
+  // Update brush status indicator
+  function updateBrushStatus(text, isActive = false) {
+    if (!brushStatusEl || !brushStatusText) return;
+    brushStatusText.textContent = text;
+    if (isActive) {
+      brushStatusEl.style.background = '#e7f5ff';
+      brushStatusEl.style.borderColor = '#74c0fc';
     } else {
-      brushToggleBtn.style.background = '#fff';
-      brushToggleBtn.style.color = '#000';
-      brushToggleBtn.style.borderColor = '#dee2e6';
-      brushToggleBtn.textContent = 'Enable Brush';
+      brushStatusEl.style.background = '#f8f9fa';
+      brushStatusEl.style.borderColor = '#dee2e6';
     }
-  }
-
-  if (brushToggleBtn) {
-    brushToggleBtn.addEventListener('click', () => {
-      brushEnabled = !brushEnabled;
-      console.log('Brush toggled:', brushEnabled);
-      
-      if (brushEnabled) {
-        // Disable fisheye when brush is active (they conflict)
-        if (fisheyeEnabled) {
-          fisheyeEnabled = false;
-          updateLensingButtonState();
-        }
-        
-        // Enable brush on SVG (will be set up in render())
-        if (typeof enableBrushFn === 'function') {
-          enableBrushFn();
-        }
-      } else {
-        // Disable brush
-        if (typeof disableBrushFn === 'function') {
-          disableBrushFn();
-        }
-      }
-      
-      updateBrushButtonState();
-    });
   }
 
   // Handle clear brush button
@@ -375,10 +344,10 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   // Reference to toggleLensing function so button can trigger it
   let toggleLensingFn = null;
 
-  // State for last rendered data (for resize re-render)
-  let lastRenderedData = null;
-  // Store original unfiltered data for legend filtering
+  // Store original unfiltered data for legend filtering and resize re-render
   let originalData = null;
+  // Cache computed links from originalData to avoid recomputing on every render
+  let cachedOriginalLinks = null;
   // Flag to track if we're rendering filtered data (to prevent overwriting originalData)
   let isRenderingFilteredData = false;
   // Cleanup function for resize handler
@@ -414,38 +383,39 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     const handleResizeLogic = () => {
       try {
         // Only proceed if we have data to re-render
-        if (!lastRenderedData || lastRenderedData.length === 0) {
+        if (!originalData || originalData.length === 0) {
           return;
         }
-        
+
         console.log('Handling window resize, updating visualization dimensions');
-        
+
         // Store old dimensions for comparison
         const oldWidth = width;
         const oldHeight = height;
-        
+
         const containerEl = document.getElementById('chart-container');
         if (!containerEl) return;
-        
+
         // Calculate new dimensions
         const containerRect = containerEl.getBoundingClientRect();
         const availableWidth = containerRect.width || 1200;
         const viewportWidth = Math.max(availableWidth, 800);
         const newWidth = viewportWidth - MARGIN.left - MARGIN.right;
-        
+
         // Skip if dimensions haven't changed significantly
         if (Math.abs(newWidth - oldWidth) < 10) {
           return;
         }
-        
+
         console.log(`Resize: ${oldWidth}x${oldHeight} -> ${newWidth}x${height}`);
-        
-        // Re-render with the new dimensions
-        // The render function will recalculate all scales and positions
-        render(lastRenderedData);
-        
+
+        // Re-render with current filter state (filtered or unfiltered)
+        // applyAttackFilter will render originalData if all attacks visible,
+        // or filter and render if some attacks are hidden
+        applyAttackFilter();
+
         console.log('Window resize handling complete');
-        
+
       } catch (e) {
         console.warn('Error during window resize:', e);
       }
@@ -540,27 +510,65 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   fileInput?.addEventListener('change', async (e) => {
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
-    
+
     // Show loading status
     if (files.length === 1) {
       setStatus(statusEl,`Loading ${files[0].name} …`);
     } else {
       setStatus(statusEl,`Loading ${files.length} files…`);
     }
-    
+
     try {
-      console.log('Processing CSV files with IP map status:', { 
+      // === CLEANUP: Free memory from previous data BEFORE loading new data ===
+      // This prevents having both old and new data in memory simultaneously
+      if (originalData) {
+        originalData.length = 0; // Clear array contents
+        originalData = null;
+      }
+
+      // Clear cached computed data
+      if (cachedOriginalLinks) {
+        cachedOriginalLinks.length = 0;
+        cachedOriginalLinks = null;
+      }
+
+      // Clear selection and UI state
+      visibleAttacks.clear();
+      selectedArcs = [];
+      selectedIps.clear();
+      brushSelection = null;
+      selectionTimeRange = null;
+      persistentSelections = [];
+      currentPairsByFile = null;
+
+      // Clear multi-selection group if it exists
+      if (multiSelectionsGroup) {
+        multiSelectionsGroup.selectAll('*').remove();
+        multiSelectionsGroup = null;
+      }
+
+      // Clear current sorted IPs
+      currentSortedIps = [];
+
+      // Clear chart SVG to free DOM memory
+      svg.selectAll('*').remove();
+      d3.select('#axis-top').selectAll('*').remove();
+
+      console.log('Pre-load cleanup completed - old data freed before loading new files');
+      // === END CLEANUP ===
+
+      console.log('Processing CSV files with IP map status:', {
         fileCount: files.length,
-        ipMapLoaded, 
-        ipMapSize: ipIdToAddr ? ipIdToAddr.size : 0 
+        ipMapLoaded,
+        ipMapSize: ipIdToAddr ? ipIdToAddr.size : 0
       });
-      
+
       // Warn if IP map is not loaded
       if (!ipMapLoaded || !ipIdToAddr || ipIdToAddr.size === 0) {
         console.warn('IP map not loaded or empty. Some IP IDs may not be mapped correctly.');
         setStatus(statusEl,'Warning: IP map not loaded. Some data may be filtered out.');
       }
-      
+
       // Reset loaded file info
       loadedFileInfo = [];
       
@@ -657,10 +665,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       
       setStatus(statusEl,statusMsg);
 
-      // Reset legend state for new data to ensure proper filtering
-      originalData = null;
-      visibleAttacks.clear();
-
+      // Render new data (cleanup already done at the start of this handler)
       render(combinedData);
     } catch (err) {
       console.error(err);
@@ -707,6 +712,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       if (lastRawCsvRows) {
         // Reset legend state for updated mappings
         originalData = null;
+        cachedOriginalLinks = null; // Clear cached links
         visibleAttacks.clear();
         // rebuild to decode IP ids again
         render(rebuildDataFromRawRows(lastRawCsvRows));
@@ -756,6 +762,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       if (lastRawCsvRows) {
         // Reset legend state for updated mappings
         originalData = null;
+        cachedOriginalLinks = null; // Clear cached links
         visibleAttacks.clear();
         // rebuild to decode attack IDs again
         render(rebuildDataFromRawRows(lastRawCsvRows));
@@ -870,18 +877,69 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   }
 
   function clearChart() {
+    // Clear main chart SVG
     svg.selectAll('*').remove();
+
+    // Clear axis SVG
+    const axisSvg = d3.select('#axis-top');
+    axisSvg.selectAll('*').remove();
+
+    // Clear legend
     legendEl.innerHTML = '';
+
+    // Clear data array to free memory
+    if (originalData) {
+      originalData.length = 0;
+      originalData = null;
+    }
+
+    // Clear cached computed data
+    if (cachedOriginalLinks) {
+      cachedOriginalLinks.length = 0;
+      cachedOriginalLinks = null;
+    }
+
+    // Clear selection state
+    selectedArcs = [];
+    selectedIps.clear();
+    brushSelection = null;
+    selectionTimeRange = null;
+    persistentSelections = [];
+
+    // Clear multi-selection group
+    if (multiSelectionsGroup) {
+      multiSelectionsGroup.selectAll('*').remove();
+      multiSelectionsGroup = null;
+    }
+
+    // Clear resize handler
+    if (resizeCleanup && typeof resizeCleanup === 'function') {
+      resizeCleanup();
+      resizeCleanup = null;
+    }
+
+    console.log('Chart cleared - all SVG elements and data structures released');
   }
 
   // Use d3 formatters consistently; we prefer UTC to match axis
 
   // Function to filter data based on visible attacks and re-render
+  // Also used by resize handler to re-render current view (filtered or unfiltered)
   function applyAttackFilter() {
     if (!originalData || originalData.length === 0) return;
 
-    // Filter data to only include visible attacks
     const activeLabelKey = labelMode === 'attack_group' ? 'attack_group' : 'attack';
+
+    // Get all possible attacks from original data
+    const allAttacks = new Set(originalData.map(d => d[activeLabelKey] || 'normal'));
+
+    // If all attacks are visible, render original data without filtering
+    if (visibleAttacks.size >= allAttacks.size) {
+      render(originalData);
+      return;
+    }
+
+    // Filter data to only include visible attacks
     const filteredData = originalData.filter(d => {
       const attackName = (d[activeLabelKey] || 'normal');
       return visibleAttacks.has(attackName);
@@ -917,13 +975,38 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   }
 
   function render(data) {
-    // Store data for resize re-render
-    lastRenderedData = data;
+    // === CLEANUP: Clear all previous render state before starting ===
+    // Clear SVG elements to prevent DOM bloat
+    svg.selectAll('*').remove();
 
-    // Store original data for filtering (only if this is truly new data, not filtered data)
+    // Clear axis SVG (don't use const to avoid duplicate declaration later)
+    d3.select('#axis-top').selectAll('*').remove();
+
+    // Clear selection state arrays to free memory
+    selectedArcs = [];
+    selectedIps.clear();
+    brushSelection = null;
+    selectionTimeRange = null;
+    persistentSelections = [];
+
+    // Clear resize handler if it exists
+    if (resizeCleanup && typeof resizeCleanup === 'function') {
+      resizeCleanup();
+      resizeCleanup = null;
+    }
+
+    // Clear arc paths reference
+    currentArcPaths = null;
+
+    console.log('Render cleanup completed - SVG, axis, and state cleared');
+    // === END CLEANUP ===
+
+    // Store original data for filtering and resize (only if this is truly new data, not filtered data)
     // Don't overwrite originalData if we're rendering filtered data
     if (!isRenderingFilteredData && (!originalData || visibleAttacks.size === 0)) {
       originalData = data;
+      // Clear cached links since we have new original data
+      cachedOriginalLinks = null;
       console.log('Stored original data:', originalData.length, 'records');
     }
 
@@ -994,7 +1077,12 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     });
 
     // Build attacks list from ORIGINAL data (not filtered) so legend always shows all attacks
-    const originalLinks = originalData ? computeLinks(originalData) : links;
+    // Use cached originalLinks if available to avoid recomputing
+    if (!cachedOriginalLinks && originalData) {
+      cachedOriginalLinks = computeLinks(originalData);
+      console.log('Computed and cached originalLinks:', cachedOriginalLinks.length, 'links');
+    }
+    const originalLinks = cachedOriginalLinks || links;
     const attacks = Array.from(new Set(originalLinks.map(l => l[activeLabelKey] || 'normal'))).sort();
 
     // Only initialize visibleAttacks on first render or when switching label modes
@@ -1016,7 +1104,12 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     height = MARGIN.top + INNER_HEIGHT + MARGIN.bottom;
 
     // Initial SVG size - will be updated after calculating actual arc extents
-    svg.attr('width', width + MARGIN.left + MARGIN.right).attr('height', height);
+    svg.attr('width', width + MARGIN.left + MARGIN.right)
+       .attr('height', height)
+       .style('user-select', 'none')  // Prevent text selection during brush drag
+       .style('-webkit-user-select', 'none')
+       .style('-moz-user-select', 'none')
+       .style('-ms-user-select', 'none');
 
     const xMinDate = toDate(tsMin);
     const xMaxDate = toDate(tsMax);
@@ -1204,13 +1297,15 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     function updateNodePositions() {
       // X position for all labels: first time tick in the timeline
       const firstTimeTickX = xScaleLens(tsMin);
+      // Offset labels to the left to avoid touching the first arc
+      const labelOffset = 15; // pixels to nudge labels left
       allIps.forEach(ip => {
         const node = ipToNode.get(ip);
         if (node) {
           // Y position comes from the scale (matching main.js n.y)
           node.y = yScaleLens(ip);
-          // X position: first time tick in the timeline (keep current y position logic)
-          node.xConnected = firstTimeTickX;
+          // X position: nudged left of first time tick to avoid arc overlap
+          node.xConnected = firstTimeTickX - labelOffset;
         }
       });
     }
@@ -1323,150 +1418,57 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     // Store arcPaths reference for legend filtering (after all handlers are attached)
     currentArcPaths = arcPaths;
 
-    // Setup brush selection for data extraction
+    // Setup brush selection for data extraction with drag-to-brush behavior
+    // User can click and drag anywhere to select - no toggle needed
     let brushGroup = null;
     let brush = null;
 
-    const enableBrushFn = () => {
-      if (brushGroup) {
-        brushGroup.style('display', null);
-        return;
-      }
+    const setupDragToBrush = () => {
+      if (brushGroup) return; // Already set up
 
       // Create brush
       brush = d3.brush()
         .extent([[MARGIN.left, MARGIN.top], [width + MARGIN.left, MARGIN.top + INNER_HEIGHT]])
-        .on('start brush end', function(event) {
+        .on('start', function(event) {
+          // Disable fisheye during brushing to prevent conflicts
+          if (fisheyeEnabled) {
+            fisheyeEnabled = false;
+            updateLensingButtonState();
+          }
+          updateBrushStatus('Selecting...', true);
+        })
+        .on('brush', function(event) {
+          if (!event.selection) return;
+          const [[x0, y0], [x1, y1]] = event.selection;
+          brushSelection = { x0, y0, x1, y1 };
+          // Lightweight update during drag
+          updateSelectionDuringBrush(x0, y0, x1, y1);
+        })
+        .on('end', function(event) {
+          // The brush 'end' event fires when:
+          // 1. User clears the brush (clicks outside selection)
+          // 2. brush.move(null) is called
+          // Note: Selection processing is handled by finalizeBrushSelection in mouseup.dragbrush
+
+          // Disable brush overlay pointer events
+          if (brushGroup) {
+            brushGroup.select('.overlay').style('pointer-events', 'none');
+          }
+
           if (!event.selection) {
-            // Brush cleared
+            // Brush was cleared - update status but don't clear persistent selections
             brushSelection = null;
+            // Only reset current selection state, not persistent selections
             selectedArcs = [];
             selectedIps.clear();
             selectionTimeRange = null;
-            updateSelectionDisplay();
-            return;
-          }
 
-          const [[x0, y0], [x1, y1]] = event.selection;
-          brushSelection = { x0, y0, x1, y1 };
-
-          // Debug: Log brush bounds
-          if (event.type === 'end') {
-            console.log('Brush selection bounds:', {
-              x: [x0, x1],
-              y: [y0, y1],
-              width: x1 - x0,
-              height: y1 - y0
-            });
-          }
-
-          // Find arcs within brush selection
-          selectedArcs = [];
-          selectedIps.clear();
-          let minTime = Infinity;
-          let maxTime = -Infinity;
-          
-          // Debug counters
-          let xPassCount = 0;
-          let yPassCount = 0;
-          let bothPassCount = 0;
-
-          linksWithNodes.forEach(link => {
-            // Get arc position
-            const xp = xScaleLens(link.minute);
-            const arcSourceY = yScaleLens(link.sourceNode.name);
-            const arcTargetY = yScaleLens(link.targetNode.name);
-
-            // Check horizontal: arc x position within brush x range
-            const xIntersects = xp >= x0 && xp <= x1;
-            
-            // Check vertical: BOTH endpoints must be within brush y range
-            // This prevents selecting long arcs that extend outside the box
-            // Brush bounds: y0 (top) to y1 (bottom)
-            const sourceInBrush = arcSourceY >= y0 && arcSourceY <= y1;
-            const targetInBrush = arcTargetY >= y0 && arcTargetY <= y1;
-            const yIntersects = sourceInBrush && targetInBrush;
-            
-            const intersects = xIntersects && yIntersects;
-            
-            // Debug counting
-            if (xIntersects) xPassCount++;
-            if (yIntersects) yPassCount++;
-            if (intersects) bothPassCount++;
-
-            if (intersects) {
-              selectedArcs.push(link);
-              selectedIps.add(link.sourceNode.name);
-              selectedIps.add(link.targetNode.name);
-              
-              // Track time range
-              if (link.minute < minTime) minTime = link.minute;
-              if (link.minute > maxTime) maxTime = link.minute;
-            }
-          });
-          
-          // Debug: Log selection results
-          if (event.type === 'end') {
-            console.log('Selection results:', {
-              totalArcs: linksWithNodes.length,
-              xPassCount,
-              yPassCount,
-              bothPassCount,
-              selectedIps: selectedIps.size,
-              brushHeight: y1 - y0,
-              brushWidth: x1 - x0,
-              brushBounds: { x0, x1, y0, y1 }
-            });
-          }
-
-          // Compute time range from selected arcs
-          // If all arcs are in the same time bin (minTime === maxTime), expand to cover the bin duration
-          if (selectedArcs.length > 0) {
-            if (minTime === maxTime) {
-              // Single time bin selected - expand to cover the bin's duration
-              // TimeArcs bins by the current unit (minutes, hours, etc.)
-              // For minute bins: expand to 1 minute = 60 units (if data is in seconds) or 1 unit (if data is in minutes)
-              const binDuration = 1; // 1 unit in the current time scale
-              selectionTimeRange = { min: minTime, max: minTime + binDuration };
-              console.log('[TimeArcs] Expanded single-point selection from', minTime, 'to range:', selectionTimeRange);
+            // Update status based on whether there are persistent selections
+            if (persistentSelections.length > 0) {
+              updateBrushStatus(`${persistentSelections.length} selection${persistentSelections.length > 1 ? 's' : ''} saved`, false);
             } else {
-              selectionTimeRange = { min: minTime, max: maxTime };
+              updateBrushStatus('Drag to select', false);
             }
-          } else {
-            selectionTimeRange = null;
-          }
-
-          // Update visual feedback
-          updateSelectionDisplay();
-
-          // Log selection info
-          if (event.type === 'end' && selectedArcs.length > 0) {
-            console.log('Brush selection:', {
-              arcs: selectedArcs.length,
-              ips: selectedIps.size,
-              timeRange: selectionTimeRange
-            });
-
-            // Persist this selection and create visual representation
-            const selectionId = ++selectionIdCounter;
-            const persistedSelection = {
-              id: selectionId,
-              bounds: { x0, y0, x1, y1 },
-              arcs: [...selectedArcs],
-              ips: new Set(selectedIps),
-              timeRange: { ...selectionTimeRange }
-            };
-            persistentSelections.push(persistedSelection);
-
-            // Create visual representation for this selection
-            createPersistentSelectionVisual(persistedSelection);
-
-            // Clear the brush so user can draw another selection
-            setTimeout(() => {
-              if (brush && brushGroup) {
-                brushGroup.call(brush.move, null);
-              }
-            }, 50);
           }
         });
 
@@ -1482,11 +1484,203 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
         .style('stroke-width', 2)
         .style('stroke-dasharray', '5,5');
 
+      // CRITICAL: Disable pointer events on overlay initially
+      // This allows hover events on arcs to work normally
+      brushGroup.select('.overlay').style('pointer-events', 'none');
+
       // Create group for persistent selections (below brush group)
       if (!multiSelectionsGroup) {
         multiSelectionsGroup = svg.insert('g', '.brush-group')
           .attr('class', 'multi-selections-group');
       }
+
+      // Add drag detection handlers to SVG for drag-to-brush
+      // This allows hover to work normally, but click+drag starts brush selection
+      svg.on('mousedown.dragbrush', function(event) {
+        // Ignore if clicking on persistent selection elements
+        if (event.target.closest('.persistent-selection')) return;
+        // Ignore if clicking on brush handles (for resizing existing selection)
+        if (event.target.closest('.brush-group .handle')) return;
+        // Ignore right-click
+        if (event.button !== 0) return;
+
+        // Allow drag detection to start anywhere, including on arcs
+        // If user drags > threshold, we'll start brush selection
+        // If user just clicks (< threshold), arc interactions still work
+
+        dragStart = d3.pointer(event, this);
+        isDragging = false;
+      });
+
+      svg.on('mousemove.dragbrush', function(event) {
+        if (!dragStart) return;
+
+        const current = d3.pointer(event, this);
+        const distance = Math.hypot(current[0] - dragStart[0], current[1] - dragStart[1]);
+
+        if (!isDragging && distance > DRAG_THRESHOLD) {
+          isDragging = true;
+          console.log('Drag threshold exceeded, starting brush selection');
+
+          // Prevent default behavior NOW that we know it's a drag
+          event.preventDefault();
+
+          // Disable pointer events on arcs to prevent hover/selection during brush
+          arcPaths.style('pointer-events', 'none');
+
+          // Enable brush overlay pointer events
+          brushGroup.select('.overlay').style('pointer-events', 'all');
+        }
+
+        // If dragging, prevent default and set the brush selection
+        if (isDragging) {
+          // Continue preventing text selection during drag
+          event.preventDefault();
+
+          // Calculate selection bounds from drag start to current position
+          const x0 = Math.min(dragStart[0], current[0]);
+          const y0 = Math.min(dragStart[1], current[1]);
+          const x1 = Math.max(dragStart[0], current[0]);
+          const y1 = Math.max(dragStart[1], current[1]);
+
+          // Use brush.move to set the selection programmatically
+          brushGroup.call(brush.move, [[x0, y0], [x1, y1]]);
+        }
+      });
+
+      svg.on('mouseup.dragbrush', function(event) {
+        if (isDragging && dragStart) {
+          // Finalize the brush selection
+          const current = d3.pointer(event, this);
+          const x0 = Math.min(dragStart[0], current[0]);
+          const y0 = Math.min(dragStart[1], current[1]);
+          const x1 = Math.max(dragStart[0], current[0]);
+          const y1 = Math.max(dragStart[1], current[1]);
+
+          // Process the selection
+          finalizeBrushSelection(x0, y0, x1, y1);
+
+          // Clear the brush visual and disable pointer events
+          brushGroup.call(brush.move, null);
+          brushGroup.select('.overlay').style('pointer-events', 'none');
+
+          // Re-enable pointer events on arcs after brush ends
+          arcPaths.style('pointer-events', null);
+        }
+        dragStart = null;
+        isDragging = false;
+      });
+
+      svg.on('mouseleave.dragbrush', function() {
+        // Cancel drag detection if mouse leaves SVG
+        if (isDragging) {
+          // Re-enable pointer events on arcs if drag was in progress
+          arcPaths.style('pointer-events', null);
+        }
+        if (dragStart) {
+          dragStart = null;
+        }
+        isDragging = false;
+      });
+    };
+
+    // Lightweight selection update during brush drag (for responsive feedback)
+    const updateSelectionDuringBrush = (x0, y0, x1, y1) => {
+      // Count arcs during drag for visual feedback
+      let arcCount = 0;
+      let ipSet = new Set();
+
+      linksWithNodes.forEach(link => {
+        const xp = xScaleLens(link.minute);
+        const arcSourceY = yScaleLens(link.sourceNode.name);
+        const arcTargetY = yScaleLens(link.targetNode.name);
+
+        const xIntersects = xp >= x0 && xp <= x1;
+        const sourceInBrush = arcSourceY >= y0 && arcSourceY <= y1;
+        const targetInBrush = arcTargetY >= y0 && arcTargetY <= y1;
+
+        if (xIntersects && sourceInBrush && targetInBrush) {
+          arcCount++;
+          ipSet.add(link.sourceNode.name);
+          ipSet.add(link.targetNode.name);
+        }
+      });
+
+      updateBrushStatus(`${arcCount} arcs, ${ipSet.size} IPs`, true);
+    };
+
+    // Finalize brush selection - called when drag ends
+    const finalizeBrushSelection = (x0, y0, x1, y1) => {
+      console.log('Finalizing brush selection:', { x0, y0, x1, y1 });
+
+      // Find arcs within brush selection
+      selectedArcs = [];
+      selectedIps.clear();
+      let minTime = Infinity;
+      let maxTime = -Infinity;
+
+      linksWithNodes.forEach(link => {
+        const xp = xScaleLens(link.minute);
+        const arcSourceY = yScaleLens(link.sourceNode.name);
+        const arcTargetY = yScaleLens(link.targetNode.name);
+
+        const xIntersects = xp >= x0 && xp <= x1;
+        const sourceInBrush = arcSourceY >= y0 && arcSourceY <= y1;
+        const targetInBrush = arcTargetY >= y0 && arcTargetY <= y1;
+        const yIntersects = sourceInBrush && targetInBrush;
+
+        if (xIntersects && yIntersects) {
+          selectedArcs.push(link);
+          selectedIps.add(link.sourceNode.name);
+          selectedIps.add(link.targetNode.name);
+
+          if (link.minute < minTime) minTime = link.minute;
+          if (link.minute > maxTime) maxTime = link.minute;
+        }
+      });
+
+      // Compute time range
+      if (selectedArcs.length > 0) {
+        if (minTime === maxTime) {
+          selectionTimeRange = { min: minTime, max: minTime + 1 };
+        } else {
+          selectionTimeRange = { min: minTime, max: maxTime };
+        }
+
+        console.log('Brush selection:', {
+          arcs: selectedArcs.length,
+          ips: selectedIps.size,
+          timeRange: selectionTimeRange
+        });
+
+        // Persist this selection
+        const selectionId = ++selectionIdCounter;
+        const persistedSelection = {
+          id: selectionId,
+          bounds: { x0, y0, x1, y1 },
+          arcs: [...selectedArcs],
+          ips: new Set(selectedIps),
+          timeRange: { ...selectionTimeRange }
+        };
+        persistentSelections.push(persistedSelection);
+
+        // Create visual representation
+        createPersistentSelectionVisual(persistedSelection);
+
+        // Update display and status
+        updateSelectionDisplay();
+        updateBrushStatus(`${persistentSelections.length} selection${persistentSelections.length > 1 ? 's' : ''} saved`, false);
+      } else {
+        // No arcs selected
+        selectionTimeRange = null;
+        updateBrushStatus('No arcs selected', false);
+        setTimeout(() => updateBrushStatus('Drag to select', false), 1500);
+      }
+    };
+
+    // Legacy enableBrushFn for backwards compatibility (now just calls setupDragToBrush)
+    const enableBrushFn = () => {
+      setupDragToBrush();
     };
 
     // Create visual representation for a persistent selection
@@ -1596,18 +1790,28 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
       // Update arc highlighting
       updateSelectionDisplay();
-      console.log(`Removed persistent selection #${id}`);
+
+      // Update brush status count
+      if (persistentSelections.length > 0) {
+        updateBrushStatus(`${persistentSelections.length} selection${persistentSelections.length > 1 ? 's' : ''} saved`, false);
+      } else {
+        updateBrushStatus('Drag to select', false);
+      }
+
+      console.log(`Removed persistent selection #${id}, ${persistentSelections.length} remaining`);
     };
 
     const disableBrushFn = () => {
+      // With drag-to-brush, we don't hide the brush, just ensure overlay is disabled
       if (brushGroup) {
-        brushGroup.style('display', 'none');
-        // Clear selection
+        brushGroup.select('.overlay').style('pointer-events', 'none');
+        brushGroup.call(brush.move, null);
         brushSelection = null;
         selectedArcs = [];
         selectedIps.clear();
         selectionTimeRange = null;
         updateSelectionDisplay();
+        updateBrushStatus('Drag to select', false);
       }
     };
 
@@ -1621,8 +1825,14 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       if (multiSelectionsGroup) {
         multiSelectionsGroup.selectAll('.persistent-selection').remove();
       }
+      // Reset state
+      brushSelection = null;
+      selectedArcs = [];
+      selectedIps.clear();
+      selectionTimeRange = null;
       // Reset arc highlighting
       updateSelectionDisplay();
+      updateBrushStatus('Drag to select', false);
     };
 
     const updateSelectionDisplay = () => {
@@ -1630,22 +1840,9 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       const allPersistentArcs = persistentSelections.flatMap(s => s.arcs);
       const hasSelection = selectedArcs.length > 0 || allPersistentArcs.length > 0;
 
-      // Highlight selected arcs (from both current selection and persistent selections)
+      // Highlight selected arcs by making them thicker (no opacity change)
       if (hasSelection) {
-        arcPaths.style('stroke-opacity', d => {
-          const isInCurrent = selectedArcs.some(sel =>
-            sel.sourceNode.name === d.sourceNode.name &&
-            sel.targetNode.name === d.targetNode.name &&
-            sel.minute === d.minute
-          );
-          const isInPersistent = allPersistentArcs.some(sel =>
-            sel.sourceNode.name === d.sourceNode.name &&
-            sel.targetNode.name === d.targetNode.name &&
-            sel.minute === d.minute
-          );
-          return (isInCurrent || isInPersistent) ? 1 : 0.15;
-        })
-        .attr('stroke-width', d => {
+        arcPaths.attr('stroke-width', d => {
           const isInCurrent = selectedArcs.some(sel =>
             sel.sourceNode.name === d.sourceNode.name &&
             sel.targetNode.name === d.targetNode.name &&
@@ -1680,9 +1877,14 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
         }
         setStatus(statusEl, statusText || 'Draw brush selections to analyze');
       } else {
-        // Restore default styling
-        arcPaths.style('stroke-opacity', 0.6)
-                .attr('stroke-width', d => widthScale(Math.max(1, d.count)));
+        // Restore default stroke width (opacity stays at 0.6, no change needed)
+        arcPaths.attr('stroke-width', d => widthScale(Math.max(1, d.count)));
+        // Clear status message when no selections - show record count if data is loaded
+        if (originalData && originalData.length > 0) {
+          setStatus(statusEl, `Loaded ${originalData.length} records`);
+        } else {
+          setStatus(statusEl, 'Waiting for data…');
+        }
       }
     };
 
@@ -1979,10 +2181,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     window.clearBrushSelectionFn = clearBrushSelectionFn;
     window.exportBrushSelectionFn = exportBrushSelectionFn;
 
-    // Enable brush if brushEnabled flag is set
-    if (brushEnabled) {
-      enableBrushFn();
-    }
+    // Always set up drag-to-brush (no toggle needed - users drag to select)
+    setupDragToBrush();
 
     // Add hover handlers to IP labels to highlight connected arcs
     const labelHoverHandler = createLabelHoverHandler({
