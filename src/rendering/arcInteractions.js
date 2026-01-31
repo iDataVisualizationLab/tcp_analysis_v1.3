@@ -22,6 +22,8 @@ import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm';
  * @param {number} config.base - Base minute for relative time
  * @param {Function} config.getLabelsCompressedMode - Getter for labels compressed mode
  * @param {number} config.marginLeft - Left margin for label fallback position
+ * @param {Map} config.ipToComponent - Map from IP to component index (optional)
+ * @param {Function} config.getComponentExpansionState - Getter for component expansion state (optional)
  * @returns {Function} Mouseover event handler
  */
 export function createArcHoverHandler(config) {
@@ -41,7 +43,9 @@ export function createArcHoverHandler(config) {
     unitSuffix,
     base,
     getLabelsCompressedMode,
-    marginLeft
+    marginLeft,
+    ipToComponent,
+    getComponentExpansionState
   } = config;
 
   return function(event, d) {
@@ -88,8 +92,20 @@ export function createArcHoverHandler(config) {
       .style('fill', s => active.has(s) ? attackCol : '#343a40')
       // Ensure endpoint labels are visible even if baseline labels are hidden
       .style('opacity', s => {
+        // Always show labels for the active arc endpoints
         if (active.has(s)) return 1;
-        // Preserve compressed/normal mode for non-active labels
+
+        // For non-active labels, check component expansion state first
+        if (getComponentExpansionState && ipToComponent) {
+          const componentExpansionState = getComponentExpansionState();
+          const compIdx = ipToComponent.get(s);
+          if (compIdx !== undefined) {
+            const isExpanded = componentExpansionState.get(compIdx) === true;
+            if (!isExpanded) return 0; // Hide if component is collapsed
+          }
+        }
+
+        // Then check compressed mode for non-active labels
         if (!labelsCompressedMode) return 1;
         return 0; // Hide labels in compressed mode
       });
@@ -153,6 +169,8 @@ export function createArcMoveHandler(config) {
  * @param {Function} config.yScaleLens - Y scale with lens distortion (fallback)
  * @param {Function} config.getLabelsCompressedMode - Getter for labels compressed mode
  * @param {number} config.marginLeft - Left margin for label fallback position
+ * @param {Map} config.ipToComponent - Map from IP to component index (optional)
+ * @param {Function} config.getComponentExpansionState - Getter for component expansion state (optional)
  * @returns {Function} Mouseout event handler
  */
 export function createArcLeaveHandler(config) {
@@ -164,7 +182,9 @@ export function createArcLeaveHandler(config) {
     hideTooltip,
     yScaleLens,
     getLabelsCompressedMode,
-    marginLeft
+    marginLeft,
+    ipToComponent,
+    getComponentExpansionState
   } = config;
 
   return function() {
@@ -199,9 +219,22 @@ export function createArcLeaveHandler(config) {
         return node && node.y !== undefined ? node.y : yScaleLens(s);
       });
 
-    // Restore opacity according to compressed mode
+    // Restore opacity according to compressed mode and component expansion state
     const labelsCompressedMode = getLabelsCompressedMode();
+    const componentExpansionState = getComponentExpansionState ? getComponentExpansionState() : null;
+
     labelSelection.style('opacity', s => {
+      // Check component expansion state first (if available)
+      if (componentExpansionState && ipToComponent) {
+        const compIdx = ipToComponent.get(s);
+        if (compIdx !== undefined) {
+          // If component is collapsed, hide the label
+          const isExpanded = componentExpansionState.get(compIdx) === true;
+          if (!isExpanded) return 0;
+        }
+      }
+
+      // Then check compressed mode
       if (!labelsCompressedMode) return 1;
       return 0; // Hide labels in compressed mode
     });

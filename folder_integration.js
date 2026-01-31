@@ -49,28 +49,32 @@ let chunkedFlowState = null;  // State for chunked_flows format (on-demand loadi
  */
 export function initFolderIntegration() {
     console.log('Initializing folder integration...');
-    
-    // Wire up data source radio buttons
+
+    // Wire up data source radio buttons (if they exist)
     const csvRadio = document.getElementById('dataSourceCSV');
     const folderRadio = document.getElementById('dataSourceFolder');
     const csvSection = document.getElementById('csvSourceSection');
     const folderSection = document.getElementById('folderSourceSection');
-    
-    csvRadio.addEventListener('change', () => {
-        if (csvRadio.checked) {
-            currentMode = 'csv';
-            csvSection.style.display = 'block';
-            folderSection.style.display = 'none';
-        }
-    });
-    
-    folderRadio.addEventListener('change', () => {
-        if (folderRadio.checked) {
-            currentMode = 'folder';
-            csvSection.style.display = 'none';
-            folderSection.style.display = 'block';
-        }
-    });
+
+    if (csvRadio && folderRadio && csvSection && folderSection) {
+        csvRadio.addEventListener('change', () => {
+            if (csvRadio.checked) {
+                currentMode = 'csv';
+                csvSection.style.display = 'block';
+                folderSection.style.display = 'none';
+            }
+        });
+
+        folderRadio.addEventListener('change', () => {
+            if (folderRadio.checked) {
+                currentMode = 'folder';
+                csvSection.style.display = 'none';
+                folderSection.style.display = 'block';
+            }
+        });
+    } else {
+        console.log('Data source controls not found - likely auto-loading from TimeArcs');
+    }
     
     // Wire up separate packet/flow folder buttons
     const openPacketsFolderBtn = document.getElementById('openPacketsFolderBtn');
@@ -127,38 +131,40 @@ async function handleOpenFolder(mode = 'packets') {
         // Determine format type for display
         let formatType = mode === 'flows' ? 'Multi-Resolution Flows' : 'Multi-Resolution Packets';
 
-        // Update UI with folder info
+        // Update UI with folder info (if element exists)
         const folderInfo = document.getElementById('folderInfo');
-        const countLabel = mode === 'flows' ? 'Flows' : 'Packets';
-        const totalCount = mode === 'flows'
-            ? result.manifest?.total_flows?.toLocaleString()
-            : result.manifest?.total_packets?.toLocaleString();
+        if (folderInfo) {
+            const countLabel = mode === 'flows' ? 'Flows' : 'Packets';
+            const totalCount = mode === 'flows'
+                ? result.manifest?.total_flows?.toLocaleString()
+                : result.manifest?.total_packets?.toLocaleString();
 
-        folderInfo.innerHTML = `
-            <strong>Folder:</strong> ${result.folderName}<br>
-            <strong>Format:</strong> ${formatType}<br>
-            <strong>${countLabel}:</strong> ${totalCount || 'N/A'}<br>
-            <strong>IPs:</strong> ${result.manifest?.unique_ips || 'N/A'}
-            <div style="margin-top: 8px;">
-                <button id="loadDataBtn" style="padding: 6px 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
-                    ▶ Load ${mode === 'flows' ? 'Flows' : 'Packets'}
-                </button>
-            </div>
-        `;
+            folderInfo.innerHTML = `
+                <strong>Folder:</strong> ${result.folderName}<br>
+                <strong>Format:</strong> ${formatType}<br>
+                <strong>${countLabel}:</strong> ${totalCount || 'N/A'}<br>
+                <strong>IPs:</strong> ${result.manifest?.unique_ips || 'N/A'}
+                <div style="margin-top: 8px;">
+                    <button id="loadDataBtn" style="padding: 6px 12px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                        ▶ Load ${mode === 'flows' ? 'Flows' : 'Packets'}
+                    </button>
+                </div>
+            `;
 
-        // Wire up load data button with the correct mode
-        document.getElementById('loadDataBtn').addEventListener('click', () => {
-            if (mode === 'flows') {
-                // Choose handler based on format
-                if (manifest?.format === 'chunked_flows' || manifest?.format === 'chunked' || manifest?.format === 'chunked_flows_by_ip_pair') {
-                    handleChunkedFlowsFolder(result);
+            // Wire up load data button with the correct mode
+            document.getElementById('loadDataBtn').addEventListener('click', () => {
+                if (mode === 'flows') {
+                    // Choose handler based on format
+                    if (manifest?.format === 'chunked_flows' || manifest?.format === 'chunked' || manifest?.format === 'chunked_flows_by_ip_pair') {
+                        handleChunkedFlowsFolder(result);
+                    } else {
+                        handleFlowMultiResFolder(result);
+                    }
                 } else {
-                    handleFlowMultiResFolder(result);
+                    handleCsvMultiResFolder(result);
                 }
-            } else {
-                handleCsvMultiResFolder(result);
-            }
-        });
+            });
+        }
 
         console.log(`[FolderIntegration] Folder opened: ${result.folderName}, mode: ${mode}, format: ${manifest?.format}`);
 
@@ -297,14 +303,16 @@ async function handleCsvMultiResFolder(result) {
     }
 
     try {
-        // Update UI with folder info
+        // Update UI with folder info (if element exists)
         const folderInfo = document.getElementById('folderInfo');
-        folderInfo.innerHTML = `
-            <strong>Folder:</strong> ${result.folderName}<br>
-            <strong>Format:</strong> Multi-Resolution CSV<br>
-            <strong>Packets:</strong> ${result.manifest?.total_packets?.toLocaleString() || 'Loading...'}<br>
-            <strong>IPs:</strong> ${result.manifest?.unique_ips || 'Loading...'}
-        `;
+        if (folderInfo) {
+            folderInfo.innerHTML = `
+                <strong>Folder:</strong> ${result.folderName}<br>
+                <strong>Format:</strong> Multi-Resolution CSV<br>
+                <strong>Packets:</strong> ${result.manifest?.total_packets?.toLocaleString() || 'Loading...'}<br>
+                <strong>IPs:</strong> ${result.manifest?.unique_ips || 'Loading...'}
+            `;
+        }
 
         // Initialize CSV resolution manager - use folderLoader.folderHandle
         showProgress('Loading resolution index...', 10);
@@ -312,13 +320,15 @@ async function handleCsvMultiResFolder(result) {
 
         console.log(`[FolderIntegration] Loaded ${secondsData.length} second-level bins`);
 
-        // Update folder info with loaded data
-        folderInfo.innerHTML = `
-            <strong>Folder:</strong> ${result.folderName}<br>
-            <strong>Format:</strong> Multi-Resolution CSV<br>
-            <strong>Second bins:</strong> ${secondsData.length.toLocaleString()}<br>
-            <strong>Time range:</strong> ${formatTimeRange(csvResolutionManager.timeExtent)}
-        `;
+        // Update folder info with loaded data (if element exists)
+        if (folderInfo) {
+            folderInfo.innerHTML = `
+                <strong>Folder:</strong> ${result.folderName}<br>
+                <strong>Format:</strong> Multi-Resolution CSV<br>
+                <strong>Second bins:</strong> ${secondsData.length.toLocaleString()}<br>
+                <strong>Time range:</strong> ${formatTimeRange(csvResolutionManager.timeExtent)}
+            `;
+        }
 
         // Extract unique IPs from seconds data
         showProgress('Extracting IP addresses...', 50);

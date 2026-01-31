@@ -19,6 +19,7 @@ export function classifyFlags(flags) {
     if (flagStr === 'ACK+SYN') return 'SYN+ACK';
     if (flagStr === 'ACK+FIN') return 'FIN+ACK';
     if (flagStr === 'ACK+PSH') return 'PSH+ACK';
+    if (flagStr === 'ACK+RST') return 'RST+ACK';
     return flagStr;
 }
 
@@ -51,7 +52,7 @@ export function flagPhase(flagType) {
         case 'FIN':
         case 'FIN+ACK':
         case 'RST':
-        case 'ACK+RST':
+        case 'RST+ACK':
             return 'closing';
         default:
             return 'data';

@@ -59,7 +59,7 @@ export function createDurationLabelUpdater(context) {
  * @param {Function} context.renderFlowDetailViewZoomed - Render flow detail
  * @param {Function} context.drawSelectedFlowArcs - Draw flow arcs
  * @param {Function} context.drawGroundTruthBoxes - Draw ground truth
- * @param {Function} context.createSmartTickFormatter - Create tick formatter
+ * @param {Function} context.createZoomAdaptiveTickFormatter - Create zoom-adaptive tick formatter
  * @param {Function} context.getVisiblePackets - Filter visible packets
  * @param {Function} context.buildSelectedFlowKeySet - Build flow key set
  * @param {Function} context.makeConnectionKey - Create connection key
@@ -99,7 +99,7 @@ export function createTimeArcsZoomHandler(context) {
         renderFlowDetailViewZoomed,
         drawSelectedFlowArcs,
         drawGroundTruthBoxes,
-        createSmartTickFormatter,
+        createZoomAdaptiveTickFormatter,
         getVisiblePackets,
         buildSelectedFlowKeySet,
         makeConnectionKey,
@@ -144,7 +144,7 @@ export function createTimeArcsZoomHandler(context) {
             // Update axis
             if (bottomOverlayAxisGroup) {
                 bottomOverlayAxisGroup.call(
-                    d3.axisBottom(xScale).tickFormat(createSmartTickFormatter(xScale.domain()))
+                    d3.axisBottom(xScale).tickFormat(createZoomAdaptiveTickFormatter(() => xScale))
                 );
             }
 

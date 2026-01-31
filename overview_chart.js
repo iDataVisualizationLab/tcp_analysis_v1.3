@@ -2,6 +2,7 @@
 import { GLOBAL_BIN_COUNT } from './config.js';
 import { createOverviewFlowLegend } from './legends.js';
 import { showFlowListModal } from './sidebar.js';
+import { createFullRangeTickFormatter } from './src/utils/formatters.js';
 // Internal state
 let overviewSvg, overviewXScale, overviewBrush, overviewWidth = 0, overviewHeight = 100;
 let isUpdatingFromBrush = false; // prevent circular updates
@@ -698,11 +699,7 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
     // Note: Flow legends now displayed horizontally above the chart instead of in sidebar
 
     const overviewXAxis = d3.axisBottom(overviewXScale)
-        .tickFormat(d => {
-            const timestampInt = Math.floor(d);
-            const date = new Date(timestampInt / 1000);
-            return date.toISOString().split('T')[1].split('.')[0];
-        });
+        .tickFormat(createFullRangeTickFormatter(timeExtent));
 
     // Move the time axis to the center of the ongoing band
     const timeAxisY = (axisY - (chartHeightUpOngoing / 2));
@@ -1143,11 +1140,7 @@ export function createOverviewFromPairs(pairOverview, selectedIPs, options) {
 
     // Add time axis (at center of ongoing band)
     const overviewXAxis = d3.axisBottom(overviewXScale)
-        .tickFormat(d => {
-            const timestampInt = Math.floor(d);
-            const date = new Date(timestampInt / 1000);
-            return date.toISOString().split('T')[1].split('.')[0];
-        });
+        .tickFormat(createFullRangeTickFormatter(timeExtent));
 
     const timeAxisY = axisY - (chartHeightUpOngoing / 2);
     overviewSvg.append('g')
@@ -1539,7 +1532,7 @@ export function createOverviewFromAdaptive(adaptiveData, { timeExtent, width, ma
                 const bin = adaptiveData.bins.find(b => b.binIndex === d.binIndex);
                 const binStart = bin ? bin.start : timeExtent[0];
                 const binEnd = bin ? bin.end : timeExtent[1];
-                console.log(`[AdaptiveOverviewClick] Bin click, loading flows for time range: ${binStart} - ${binEnd}`);
+                console.log(`[AdaptiveOverviewClick] Bin click, segment count: ${d.count}, kind: ${d.kind}, reason: ${d.reason}, loading flows for time range: ${binStart} - ${binEnd}`);
 
                 if (typeof loadPacketBinRef === 'function') {
                     try { loadPacketBinRef(d.binIndex); } catch (_) {}
@@ -1589,10 +1582,7 @@ export function createOverviewFromAdaptive(adaptiveData, { timeExtent, width, ma
     // Render time axis (use UTC to match main chart)
     const xAxis = d3.axisBottom(overviewXScale)
         .ticks(6)
-        .tickFormat(d => {
-            const date = new Date(d / 1000);
-            return date.toISOString().substring(11, 19);
-        });
+        .tickFormat(createFullRangeTickFormatter(timeExtent));
 
     overviewSvg.append('g')
         .attr('class', 'overview-axis')

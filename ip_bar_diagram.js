@@ -14,7 +14,7 @@ import {
     LOG, formatBytes, formatTimestamp, formatDuration,
     utcToEpochMicroseconds, epochMicrosecondsToUTC,
     makeConnectionKey, clamp, normalizeProtocolValue,
-    createSmartTickFormatter
+    createSmartTickFormatter, createZoomAdaptiveTickFormatter
 } from './src/utils/formatters.js';
 import {
     classifyFlags, getFlagType, flagPhase, isFlagVisibleByPhase,
@@ -740,9 +740,9 @@ function setupWindowResizeHandler() {
                 bottomOverlayRoot.attr('transform', `translate(${chartMarginLeft},0)`);
             }
             
-            // Update main chart axis and legends
+            // Update main chart axis and legends with zoom-adaptive formatting
             if (bottomOverlayAxisGroup && xScale && state.data.timeExtent) {
-                const axis = d3.axisBottom(xScale).tickFormat(createSmartTickFormatter(state.data.timeExtent));
+                const axis = d3.axisBottom(xScale).tickFormat(createZoomAdaptiveTickFormatter(() => xScale));
                 bottomOverlayAxisGroup.call(axis);
                 
                 // Redraw legends with new dimensions
@@ -1644,7 +1644,7 @@ document.getElementById('selectAllIPs').addEventListener('click', async () => {
     document.querySelectorAll('#ipCheckboxes input[type="checkbox"]').forEach(cb => cb.checked = true);
     await updateIPFilter();
 });
-        
+
 document.getElementById('clearAllIPs').addEventListener('click', async () => {
     document.querySelectorAll('#ipCheckboxes input[type="checkbox"]').forEach(cb => cb.checked = false);
     await updateIPFilter();
@@ -1673,6 +1673,7 @@ function getIPFilterController() {
             eventColors,
             visualizeTimeArcs,
             drawFlagLegend,
+            updateFlagStats,
             updateIPStats,
             applyTimearcsTimeRangeZoom,
             computeForceLayoutPositions,
@@ -2968,9 +2969,9 @@ function renderFlowDetailView(flow, packets) {
     // Draw permanent sequential arcs connecting packets
     drawFlowDetailArcs(flow, preparedPackets);
 
-    // Update x-axis
+    // Update x-axis with zoom-adaptive formatting
     if (bottomOverlayAxisGroup && state.data.timeExtent) {
-        bottomOverlayAxisGroup.call(d3.axisBottom(xScale).tickFormat(createSmartTickFormatter(viewTimeExtent)));
+        bottomOverlayAxisGroup.call(d3.axisBottom(xScale).tickFormat(createZoomAdaptiveTickFormatter(() => xScale)));
     }
 
     // Update IP labels to show only relevant IPs
@@ -3255,7 +3256,7 @@ function visualizeTimeArcs(packets) {
             chartMarginRight,
             overlayHeight: bottomOverlayHeight,
             xScale,
-            tickFormatter: createSmartTickFormatter(state.data.timeExtent)
+            tickFormatter: createZoomAdaptiveTickFormatter(() => xScale)
         });
         bottomOverlaySvg = overlayResult.bottomOverlaySvg;
         bottomOverlayRoot = overlayResult.bottomOverlayRoot;
@@ -3301,8 +3302,8 @@ function visualizeTimeArcs(packets) {
         yScaleRange: yRange
     });
 
-    // 14. Create zoom handler using extracted module
-    const xAxis = d3.axisBottom(xScale).tickFormat(createSmartTickFormatter(state.data.timeExtent));
+    // 14. Create zoom handler using extracted module (will be updated during zoom)
+    const xAxis = d3.axisBottom(xScale).tickFormat(createZoomAdaptiveTickFormatter(() => xScale));
 
     const zoomed = createTimeArcsZoomHandler({
         d3,
@@ -3327,7 +3328,7 @@ function visualizeTimeArcs(packets) {
         renderFlowDetailViewZoomed,
         drawSelectedFlowArcs,
         drawGroundTruthBoxes,
-        createSmartTickFormatter,
+        createZoomAdaptiveTickFormatter,
         getVisiblePackets,
         buildSelectedFlowKeySet,
         makeConnectionKey,
@@ -3444,7 +3445,7 @@ function visualizeTimeArcs(packets) {
             bottomOverlayRoot,
             bottomOverlayAxisGroup,
             xScale,
-            tickFormatter: createSmartTickFormatter(state.data.timeExtent)
+            tickFormatter: createZoomAdaptiveTickFormatter(() => xScale)
         });
     } catch(e) { logCatchError('bottomOverlayResize', e); }
 }

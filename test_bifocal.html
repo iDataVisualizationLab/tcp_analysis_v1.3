@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Bifocal Transform Test</title>
+  <style>
+    body { font-family: monospace; padding: 20px; }
+    .pass { color: green; }
+    .fail { color: red; }
+    pre { background: #f5f5f5; padding: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Bifocal Transform Unit Tests</h1>
+  <div id="results"></div>
+
+  <script type="module">
+    import { bifocalTransform, bifocalInverse, computeLayoutWidths, updateFocusRegion } from './src/scales/bifocal.js';
+
+    const results = document.getElementById('results');
+
+    function test(name, fn) {
+      try {
+        fn();
+        results.innerHTML += `<div class="pass">✓ ${name}</div>`;
+      } catch (e) {
+        results.innerHTML += `<div class="fail">✗ ${name}: ${e.message}</div>`;
+      }
+    }
+
+    function assert(condition, message) {
+      if (!condition) throw new Error(message || 'Assertion failed');
+    }
+
+    function assertClose(a, b, tolerance = 0.0001, message) {
+      assert(Math.abs(a - b) < tolerance, message || `Expected ${a} ≈ ${b}`);
+    }
+
+    // Test state
+    const state = {
+      focusStart: 0.3,
+      focusEnd: 0.6,
+      compressionRatio: 3.0,
+      leftContextWidth: 0.15,
+      focusWidth: 0.5,
+      rightContextWidth: 0.35
+    };
+
+    // Test 1: Monotonicity
+    test('Monotonicity: t1 < t2 implies transform(t1) < transform(t2)', () => {
+      let prev = -Infinity;
+      for (let t = 0; t <= 1; t += 0.01) {
+        const output = bifocalTransform(t, state);
+        assert(output >= prev, `Monotonicity violated at t=${t}`);
+        assert(output >= 0 && output <= 1, `Output out of bounds at t=${t}`);
+        prev = output;
+      }
+    });
+
+    // Test 2: Boundary values
+    test('Boundary values: transform(0) = 0, transform(1) = 1', () => {
+      assertClose(bifocalTransform(0, state), 0);
+      assertClose(bifocalTransform(1, state), 1);
+    });
+
+    // Test 3: Focus region boundaries
+    test('Focus region boundaries map correctly', () => {
+      const leftBoundary = bifocalTransform(state.focusStart, state);
+      const rightBoundary = bifocalTransform(state.focusEnd, state);
+
+      assertClose(leftBoundary, state.leftContextWidth);
+      assertClose(rightBoundary, state.leftContextWidth + state.focusWidth);
+    });
+
+    // Test 4: Inverse transform
+    test('Inverse: bifocalInverse(bifocalTransform(t)) = t', () => {
+      for (let t = 0; t <= 1; t += 0.05) {
+        const s = bifocalTransform(t, state);
+        const tRecovered = bifocalInverse(s, state);
+        assertClose(t, tRecovered, 0.0001, `Inverse failed at t=${t}`);
+      }
+    });
+
+    // Test 5: Layout widths computation
+    test('Layout widths sum to 1.0', () => {
+      const widths = computeLayoutWidths(state);
+      const sum = widths.leftContextWidth + widths.focusWidth + widths.rightContextWidth;
+      assertClose(sum, 1.0);
+    });
+
+    // Test 6: Compression effect
+    test('Higher compression ratio reduces context width', () => {
+      const state1 = { ...state, compressionRatio: 2.0 };
+      const state2 = { ...state, compressionRatio: 5.0 };
+
+      const widths1 = computeLayoutWidths(state1);
+      const widths2 = computeLayoutWidths(state2);
+
+      // Higher compression should give more space to focus
+      assert(widths2.focusWidth > widths1.focusWidth, 'Higher compression should increase focus width');
+    });
+
+    // Test 7: Edge case - focus at start
+    test('Edge case: focus at start (0, 0.3)', () => {
+      const edgeState = {
+        focusStart: 0,
+        focusEnd: 0.3,
+        compressionRatio: 3.0,
+        ...computeLayoutWidths({ focusStart: 0, focusEnd: 0.3, compressionRatio: 3.0 })
+      };
+
+      assertClose(bifocalTransform(0, edgeState), 0);
+      const widths = computeLayoutWidths(edgeState);
+      assert(widths.leftContextWidth === 0, 'No left context when focus starts at 0');
+    });
+
+    // Test 8: Edge case - focus at end
+    test('Edge case: focus at end (0.7, 1)', () => {
+      const edgeState = {
+        focusStart: 0.7,
+        focusEnd: 1,
+        compressionRatio: 3.0,
+        ...computeLayoutWidths({ focusStart: 0.7, focusEnd: 1, compressionRatio: 3.0 })
+      };
+
+      assertClose(bifocalTransform(1, edgeState), 1);
+      const widths = computeLayoutWidths(edgeState);
+      assert(widths.rightContextWidth === 0, 'No right context when focus ends at 1');
+    });
+
+    // Test 9: Update focus region clamping
+    test('updateFocusRegion enforces minimum width', () => {
+      const newState = updateFocusRegion(state, 0.5, 0.52);
+      const minWidth = 0.05;
+      assert(newState.focusEnd - newState.focusStart >= minWidth, 'Minimum width not enforced');
+    });
+
+    // Test 10: Update focus region boundary clamping
+    test('updateFocusRegion clamps to [0, 1]', () => {
+      const newState = updateFocusRegion(state, -0.1, 1.5);
+      assert(newState.focusStart >= 0, 'Start should be clamped to 0');
+      assert(newState.focusEnd <= 1, 'End should be clamped to 1');
+    });
+
+    results.innerHTML += '<div style="margin-top:20px; padding:10px; background:#e7f5ff; border:1px solid #74c0fc;">All tests completed!</div>';
+  </script>
+</body>
+</html>

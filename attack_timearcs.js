@@ -1,4 +1,4 @@
-import { MARGIN, DEFAULT_WIDTH, DEFAULT_HEIGHT, INNER_HEIGHT, PROTOCOL_COLORS, DEFAULT_COLOR, NEUTRAL_GREY, LENS_DEFAULTS, FISHEYE_DEFAULTS } from './src/config/constants.js';
+import { MARGIN, DEFAULT_WIDTH, DEFAULT_HEIGHT, INNER_HEIGHT, MIN_IP_SPACING, MIN_IP_SPACING_WITHIN_COMPONENT, INTER_COMPONENT_GAP, PROTOCOL_COLORS, DEFAULT_COLOR, NEUTRAL_GREY } from './src/config/constants.js';
 import { toNumber, sanitizeId, canonicalizeName, showTooltip, hideTooltip, setStatus } from './src/utils/helpers.js';
 import { decodeIp, decodeAttack, decodeAttackGroup, lookupAttackColor, lookupAttackGroupColor } from './src/mappings/decoders.js';
 import { buildRelationships, computeConnectivityFromRelationships, computeLinks, findConnectedComponents } from './src/data/aggregation.js';
@@ -8,8 +8,10 @@ import { buildLegend as createLegend, updateLegendVisualState as updateLegendUI,
 import { parseCSVStream, parseCSVLine } from './src/data/csvParser.js';
 import { detectTimestampUnit, createToDateConverter, createTimeScale, createIpScale, createWidthScale, calculateMaxArcRadius } from './src/scales/scaleFactory.js';
 import { createForceSimulation, runUntilConverged, createComponentSeparationForce, createWeakComponentSeparationForce, createComponentCohesionForce, createHubCenteringForce, createComponentYForce, initializeNodePositions, calculateComponentCenters, findComponentHubIps, calculateIpDegrees, calculateConnectionStrength, createMutualHubAttractionForce } from './src/layout/forceSimulation.js';
-import { applyLens1D, createLensXScale, createFisheyeScale, createHorizontalFisheyeScale, fisheyeDistort, createD3CartesianFisheye, createD3FisheyeXScale, createD3FisheyeYScale } from './src/scales/distortion.js';
-import { computeIpSpans, createSpanData, renderRowLines, renderIpLabels, createLabelHoverHandler, createLabelMoveHandler, createLabelLeaveHandler, attachLabelHoverHandlers } from './src/rendering/rows.js';
+import { createLensXScale } from './src/scales/distortion.js';
+import { updateFocusRegion, computeLayoutWidths } from './src/scales/bifocal.js';
+import { createBifocalHandles } from './src/ui/bifocal-handles.js';
+import { computeIpSpans, createSpanData, renderRowLines, renderIpLabels, createLabelHoverHandler, createLabelMoveHandler, createLabelLeaveHandler, attachLabelHoverHandlers, renderComponentToggles, updateComponentToggles, showComponentToggles } from './src/rendering/rows.js';
 import { createArcHoverHandler, createArcMoveHandler, createArcLeaveHandler, attachArcHandlers } from './src/rendering/arcInteractions.js';
 import { loadAllMappings } from './src/mappings/loaders.js';
 import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from './src/interaction/resize.js';
@@ -21,23 +23,108 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
 (function () {
   const fileInput = document.getElementById('fileInput');
-  const ipMapInput = document.getElementById('ipMapInput');
-  const eventMapInput = document.getElementById('eventMapInput');
   const statusEl = document.getElementById('status');
   const svg = d3.select('#chart');
   const container = document.getElementById('chart-container');
   const legendEl = document.getElementById('legend');
   const tooltip = document.getElementById('tooltip');
   const labelModeRadios = document.querySelectorAll('input[name="labelMode"]');
-  const lensingMulSlider = document.getElementById('lensingMulSlider');
-  const lensingMulValue = document.getElementById('lensingMulValue');
-  const lensingToggleBtn = document.getElementById('lensingToggle');
   const brushStatusEl = document.getElementById('brushStatus');
   const brushStatusText = document.getElementById('brushStatusText');
-  const exportSelectionBtn = document.getElementById('exportSelection');
   const clearBrushBtn = document.getElementById('clearBrush');
-  const fisheyeModeIndicator = document.getElementById('fisheyeModeIndicator');
-  const fisheyeModeText = document.getElementById('fisheyeModeText');
+
+  // Legend panel collapse/expand functionality
+  const legendPanel = document.getElementById('legendPanel');
+  const legendPanelHeader = document.getElementById('legendPanelHeader');
+
+  let legendPanelDragState = null;
+  let legendPanelCollapsed = false;
+
+  function toggleLegendCollapse() {
+    if (legendPanel) {
+      legendPanelCollapsed = !legendPanelCollapsed;
+      if (legendPanelCollapsed) {
+        legendPanel.classList.add('collapsed');
+      } else {
+        legendPanel.classList.remove('collapsed');
+      }
+    }
+  }
+
+  // Make legend panel draggable and collapsible
+  if (legendPanel && legendPanelHeader) {
+    let clickStartTime = 0;
+    let clickStartPos = { x: 0, y: 0 };
+
+    legendPanelHeader.addEventListener('mousedown', (e) => {
+      clickStartTime = Date.now();
+      clickStartPos = { x: e.clientX, y: e.clientY };
+
+      const rect = legendPanel.getBoundingClientRect();
+      legendPanelDragState = {
+        offsetX: e.clientX - rect.left,
+        offsetY: e.clientY - rect.top,
+        startX: e.clientX,
+        startY: e.clientY,
+        hasMoved: false
+      };
+
+      document.addEventListener('mousemove', onLegendPanelDrag);
+      document.addEventListener('mouseup', onLegendPanelDragEnd);
+      e.preventDefault();
+    });
+  }
+
+  function onLegendPanelDrag(e) {
+    if (!legendPanelDragState || !legendPanel) return;
+
+    const dragDistance = Math.sqrt(
+      Math.pow(e.clientX - legendPanelDragState.startX, 2) +
+      Math.pow(e.clientY - legendPanelDragState.startY, 2)
+    );
+
+    // Only start dragging if moved more than 5 pixels
+    if (dragDistance > 5) {
+      legendPanelDragState.hasMoved = true;
+      legendPanelHeader.style.cursor = 'grabbing';
+
+      const newLeft = e.clientX - legendPanelDragState.offsetX;
+      const newTop = e.clientY - legendPanelDragState.offsetY;
+
+      // Keep within viewport bounds
+      const maxLeft = window.innerWidth - legendPanel.offsetWidth;
+      const maxTop = window.innerHeight - legendPanel.offsetHeight;
+
+      legendPanel.style.left = Math.max(0, Math.min(newLeft, maxLeft)) + 'px';
+      legendPanel.style.top = Math.max(0, Math.min(newTop, maxTop)) + 'px';
+      legendPanel.style.right = 'auto'; // Override right positioning when dragging
+    }
+  }
+
+  function onLegendPanelDragEnd(e) {
+    if (legendPanelDragState && !legendPanelDragState.hasMoved) {
+      // This was a click, not a drag - toggle collapse
+      toggleLegendCollapse();
+    }
+
+    legendPanelDragState = null;
+    if (legendPanelHeader) {
+      legendPanelHeader.style.cursor = 'pointer';
+    }
+    document.removeEventListener('mousemove', onLegendPanelDrag);
+    document.removeEventListener('mouseup', onLegendPanelDragEnd);
+  }
+
+  // Progress bar elements
+  const loadingProgressEl = document.getElementById('loadingProgress');
+  const progressBarEl = document.getElementById('progressBar');
+  const progressTextEl = document.getElementById('progressText');
+
+  // Bifocal controls (always enabled, no toggle button)
+  const compressionSlider = document.getElementById('compressionSlider');
+  const compressionValue = document.getElementById('compressionValue');
+  const bifocalRegionIndicator = document.getElementById('bifocalRegionIndicator');
+  const bifocalRegionText = document.getElementById('bifocalRegionText');
 
   // IP Communications panel elements
   const ipCommHeader = document.getElementById('ip-comm-header');
@@ -102,8 +189,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     console.log('Exported IP communications to ip_communications.txt');
   }
 
-  // User-selected labeling mode: 'attack' or 'attack_group'
-  let labelMode = 'attack';
+  // User-selected labeling mode: 'timearcs' or 'force_layout'
+  let labelMode = 'timearcs';
   
   // Brush selection state
   // Brush is always available - user can click and drag anywhere to select
@@ -127,7 +214,10 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
   // Current vertical order of IPs (for passing to other visualizations)
   let currentSortedIps = []; // Updated after force simulation and sorting
-  
+
+  // Component expansion state: compIdx -> boolean (true = expanded, false = collapsed)
+  let componentExpansionState = new Map(); // Default: all collapsed
+
   // Dataset configuration: maps time ranges to data files
   // This will be populated based on loaded data or can be configured manually
   let datasetConfig = {
@@ -146,93 +236,80 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   let loadedFileInfo = [];
   labelModeRadios.forEach(r => r.addEventListener('change', () => {
     const sel = Array.from(labelModeRadios).find(r=>r.checked);
-    labelMode = sel ? sel.value : 'attack';
-    if (lastRawCsvRows) {
-      // Reset to show all data when switching label modes
-      originalData = null; // Force re-storing of original data
-      cachedOriginalLinks = null; // Clear cached links
-      visibleAttacks.clear(); // Clear visible attacks so render() re-initializes
-      render(rebuildDataFromRawRows(lastRawCsvRows));
+    labelMode = sel ? sel.value : 'timearcs';
+    // Only update colors and legend, don't recompute layout
+    if (cachedOriginalLinks && currentArcPaths) {
+      updateLabelMode();
     }
   }));
 
-  // Handle lens magnification slider
-  if (lensingMulSlider && lensingMulValue) {
-    lensingMulSlider.addEventListener('input', (e) => {
-      lensingMul = parseFloat(e.target.value);
-      fisheyeDistortion = lensingMul; // Sync fisheye distortion with slider
-      lensingMulValue.textContent = `${lensingMul}x`;
+  // Handle bifocal compression slider
+  if (compressionSlider && compressionValue) {
+    compressionSlider.addEventListener('input', (e) => {
+      bifocalState.compressionRatio = parseFloat(e.target.value);
+      compressionValue.textContent = `${bifocalState.compressionRatio}x`;
 
-      // Update vertical fisheye scale distortion if it exists
-      if (fisheyeScale && typeof fisheyeScale.distortion === 'function') {
-        fisheyeScale.distortion(fisheyeDistortion);
-      }
+      // Recompute layout widths
+      const widths = computeLayoutWidths(bifocalState);
+      bifocalState = { ...bifocalState, ...widths };
 
-      // Update horizontal fisheye scale distortion if it exists
-      if (horizontalFisheyeScale && typeof horizontalFisheyeScale.distortion === 'function') {
-        horizontalFisheyeScale.distortion(fisheyeDistortion);
-      }
-
-      // If lensing is active, update visualization immediately
-      if (isLensing && updateLensVisualizationFn) {
-        updateLensVisualizationFn();
+      // Update visualization (bifocal always active)
+      if (updateBifocalVisualizationFn) {
+        updateBifocalVisualizationFn();
       }
     });
   }
 
-  // Handle lens toggle button
-  function updateLensingButtonState() {
-    if (!lensingToggleBtn) return;
-    if (fisheyeEnabled) {
-      lensingToggleBtn.style.background = '#0d6efd';
-      lensingToggleBtn.style.color = '#fff';
-      lensingToggleBtn.style.borderColor = '#0d6efd';
-    } else {
-      lensingToggleBtn.style.background = '#fff';
-      lensingToggleBtn.style.color = '#000';
-      lensingToggleBtn.style.borderColor = '#dee2e6';
-      // Hide mode indicator when fisheye is disabled
-      if (fisheyeModeIndicator) {
-        fisheyeModeIndicator.style.display = 'none';
-      }
-    }
-  }
-
-  // Store reference to resetFisheye function so it can be called from button handler
-  let resetFisheyeFn = null;
-
-  if (lensingToggleBtn) {
-    lensingToggleBtn.addEventListener('click', () => {
-      fisheyeEnabled = !fisheyeEnabled;
-      console.log('Fisheye toggled:', fisheyeEnabled);
-
-      // Don't reset when disabled - keep the current fisheye effect
-      // User can use reset button to restore original positions
-
-      // Update cursor on SVG
-      const svgEl = d3.select('#chart');
-      svgEl.style('cursor', fisheyeEnabled ? 'crosshair' : 'default');
-
-      updateLensingButtonState();
-    });
-  }
-
-  // Handle keyboard shortcut: Shift + L to toggle lensing
+  // Handle keyboard shortcuts for bifocal navigation
   document.addEventListener('keydown', (e) => {
-    // Check for Shift + L (case insensitive)
-    if (e.shiftKey && (e.key === 'L' || e.key === 'l')) {
-      e.preventDefault(); // Prevent default browser behavior
-      fisheyeEnabled = !fisheyeEnabled;
-      console.log('Fisheye toggled (keyboard):', fisheyeEnabled);
+    // Arrow keys: navigate bifocal focus
+    if (e.key.startsWith('Arrow')) {
+      const step = e.shiftKey ? 0.1 : 0.02; // Shift for large steps
+      const focusSpan = bifocalState.focusEnd - bifocalState.focusStart;
 
-      // Don't reset when disabled - keep the current fisheye effect
-      // User can use reset button to restore original positions
-
-      // Update cursor on SVG
-      const svgEl = d3.select('#chart');
-      svgEl.style('cursor', fisheyeEnabled ? 'crosshair' : 'default');
-
-      updateLensingButtonState();
+      if (e.key === 'ArrowLeft') {
+        // Move focus region left
+        e.preventDefault();
+        const newStart = Math.max(0, bifocalState.focusStart - step);
+        const newState = updateFocusRegion(bifocalState, newStart, newStart + focusSpan);
+        bifocalState = newState;
+        if (updateBifocalVisualizationFn) {
+          updateBifocalVisualizationFn();
+        }
+      } else if (e.key === 'ArrowRight') {
+        // Move focus region right
+        e.preventDefault();
+        const newEnd = Math.min(1, bifocalState.focusEnd + step);
+        const newState = updateFocusRegion(bifocalState, newEnd - focusSpan, newEnd);
+        bifocalState = newState;
+        if (updateBifocalVisualizationFn) {
+          updateBifocalVisualizationFn();
+        }
+      } else if (e.key === 'ArrowUp') {
+        // Expand focus region
+        e.preventDefault();
+        const expandStep = step / 2;
+        const newState = updateFocusRegion(
+          bifocalState,
+          Math.max(0, bifocalState.focusStart - expandStep),
+          Math.min(1, bifocalState.focusEnd + expandStep)
+        );
+        bifocalState = newState;
+        if (updateBifocalVisualizationFn) {
+          updateBifocalVisualizationFn();
+        }
+      } else if (e.key === 'ArrowDown') {
+        // Contract focus region
+        e.preventDefault();
+        const contractStep = step / 2;
+        const center = (bifocalState.focusStart + bifocalState.focusEnd) / 2;
+        const newSpan = Math.max(0.05, focusSpan - contractStep * 2);
+        const newState = updateFocusRegion(bifocalState, center - newSpan / 2, center + newSpan / 2);
+        bifocalState = newState;
+        if (updateBifocalVisualizationFn) {
+          updateBifocalVisualizationFn();
+        }
+      }
     }
   });
 
@@ -249,6 +326,30 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     }
   }
 
+  // Progress bar helper functions
+  function showProgress() {
+    if (loadingProgressEl) {
+      loadingProgressEl.style.display = 'block';
+      statusEl.style.display = 'none';
+    }
+  }
+
+  function hideProgress() {
+    if (loadingProgressEl) {
+      loadingProgressEl.style.display = 'none';
+      statusEl.style.display = 'block';
+    }
+  }
+
+  function updateProgress(text, percent) {
+    if (progressTextEl) {
+      progressTextEl.textContent = text;
+    }
+    if (progressBarEl) {
+      progressBarEl.style.width = `${Math.min(100, Math.max(0, percent))}%`;
+    }
+  }
+
   // Handle clear brush button
   if (clearBrushBtn) {
     clearBrushBtn.addEventListener('click', () => {
@@ -259,67 +360,42 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     });
   }
 
-  // Handle export selection button
-  if (exportSelectionBtn) {
-    exportSelectionBtn.addEventListener('click', () => {
-      console.log('Exporting selection');
-      if (typeof exportBrushSelectionFn === 'function') {
-        exportBrushSelectionFn();
-      }
-    });
-  }
-
-  // Add reset button handler - set up after DOM is ready
-  // This will be called after the page loads
-  function setupResetButton() {
-    const resetFisheyeBtn = document.getElementById('resetFisheyeBtn');
-    if (resetFisheyeBtn) {
-      resetFisheyeBtn.addEventListener('click', () => {
-        console.log('Resetting fisheye to original positions');
-        if (resetFisheyeFn) {
-          resetFisheyeFn();
-        } else {
-          console.warn('Reset function not yet available. Please wait for visualization to load.');
-        }
-        // Also disable fisheye when resetting
-        fisheyeEnabled = false;
-        const svgEl = d3.select('#chart');
-        svgEl.style('cursor', 'default');
-        updateLensingButtonState();
-      });
-    }
-  }
-  
-  // Set up reset button when DOM is ready
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', setupResetButton);
-  } else {
-    setupResetButton();
-  }
 
   let width = DEFAULT_WIDTH; // updated on render
   let height = DEFAULT_HEIGHT; // updated on render
 
-  // Lens magnification state (horizontal time only, matching main.js)
-  let isLensing = false;
-  let lensingMul = 5; // Magnification factor (5x)
-  let lensCenter = 0; // Focused timestamp position (horizontal)
-  let XGAP_BASE = null; // Base X-scale gap for lens calculations
-  let labelsCompressedMode = false; // When true, hide baseline labels and only show magnified ones
+  // When true, hide baseline labels and only show magnified ones
+  let labelsCompressedMode = false;
 
-  // Fisheye state (vertical row distortion)
-  let fisheyeEnabled = false;
-  let fisheyeScale = null;
-  let fisheyeDistortion = 5; // Initial distortion amount (linked to lensingMul slider)
-  let originalRowPositions = new Map(); // Store original Y positions for each IP
+  // Store original Y positions for each IP
+  let originalRowPositions = new Map();
 
-  // Horizontal fisheye state (timeline distortion)
-  let horizontalFisheyeScale = null;
-  let currentMouseX = null; // Current mouse X position for horizontal fisheye
+  // Render generation counter to cancel stale async renders
+  let renderGeneration = 0;
 
-  // Fisheye region detection thresholds
-  const FISHEYE_TOP_EDGE_THRESHOLD = 80; // Pixels from top for horizontal-only fisheye
-  const FISHEYE_LEFT_EDGE_THRESHOLD = 150; // Pixels from left for vertical-only fisheye
+  // Cached simulation layout (IP ordering) — only recomputed on new data, not filtered re-renders
+  let cachedLayoutResult = null; // { yMap, components, ipToComponent, simNodes, allIps, nodes }
+
+  // Bifocal display state (timeline focus+context) - ALWAYS ENABLED
+  let bifocalEnabled = true;  // Always on by default
+  let bifocalState = {
+    focusStart: 0.0,           // Start with full overview
+    focusEnd: 1.0,             // Full timeline visible
+    compressionRatio: 3.0,     // Context compression factor
+    leftContextWidth: 0.0,     // Computed screen width (no left context initially)
+    focusWidth: 1.0,           // Full width for focus initially
+    rightContextWidth: 0.0     // Computed screen width (no right context initially)
+  };
+  let bifocalHandles = null; // Drag handle UI elements
+
+  // Function to update bifocal region indicator text
+  function updateBifocalRegionText() {
+    if (bifocalRegionText) {
+      const startPct = Math.round(bifocalState.focusStart * 100);
+      const endPct = Math.round(bifocalState.focusEnd * 100);
+      bifocalRegionText.textContent = `Focus: ${startPct}% - ${endPct}%`;
+    }
+  }
 
   // IP map state (id -> dotted string)
   let ipIdToAddr = null; // Map<number, string>
@@ -337,12 +413,10 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   // Track visible attacks for legend filtering
   let visibleAttacks = new Set(); // Set of attack names that are currently visible
   let currentArcPaths = null; // Reference to arc paths selection for visibility updates
-  let currentLabelMode = 'attack'; // Track current label mode for filtering
+  let currentLabelMode = 'timearcs'; // Track current label mode for filtering
 
-  // Reference to updateLensVisualization function so slider can trigger updates
-  let updateLensVisualizationFn = null;
-  // Reference to toggleLensing function so button can trigger it
-  let toggleLensingFn = null;
+  // Reference to updateBifocalVisualization function
+  let updateBifocalVisualizationFn = null;
 
   // Store original unfiltered data for legend filtering and resize re-render
   let originalData = null;
@@ -430,7 +504,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
   // Stream-parse a CSV file incrementally to avoid loading entire file into memory
   // Pushes transformed rows directly into combinedData, returns {totalRows, validRows}
-  async function processCsvFile(file, combinedData, options = { hasHeader: true, delimiter: ',' }) {
+  async function processCsvFile(file, combinedData, options = { hasHeader: true, delimiter: ',', onProgress: null }) {
     const fileName = file.name;
     const result = await parseCSVStream(file, (obj, idx) => {
       const attackName = _decodeAttack(obj.attack);
@@ -511,12 +585,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     const files = Array.from(e.target.files || []);
     if (files.length === 0) return;
 
-    // Show loading status
-    if (files.length === 1) {
-      setStatus(statusEl,`Loading ${files[0].name} …`);
-    } else {
-      setStatus(statusEl,`Loading ${files.length} files…`);
-    }
+    // Show progress bar
+    showProgress();
 
     try {
       // === CLEANUP: Free memory from previous data BEFORE loading new data ===
@@ -576,10 +646,38 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       const combinedData = [];
       const fileStats = [];
       const errors = [];
-      for (const file of files) {
+      for (let fileIdx = 0; fileIdx < files.length; fileIdx++) {
+        const file = files[fileIdx];
         try {
           const startIdx = combinedData.length;
-          const res = await processCsvFile(file, combinedData, { hasHeader: true, delimiter: ',' });
+
+          // Update progress: show which file we're processing
+          const fileNum = fileIdx + 1;
+          const baseProgress = (fileIdx / files.length) * 100;
+          const fileProgressRange = 100 / files.length;
+
+          updateProgress(
+            files.length === 1
+              ? `Loading ${file.name}...`
+              : `Loading file ${fileNum}/${files.length}: ${file.name}`,
+            baseProgress
+          );
+
+          // Process file with progress callback
+          const res = await processCsvFile(file, combinedData, {
+            hasHeader: true,
+            delimiter: ',',
+            onProgress: (bytesProcessed, totalBytes) => {
+              const filePercent = (bytesProcessed / totalBytes) * fileProgressRange;
+              const totalPercent = baseProgress + filePercent;
+              updateProgress(
+                files.length === 1
+                  ? `Loading ${file.name}... ${Math.round((bytesProcessed / totalBytes) * 100)}%`
+                  : `Loading file ${fileNum}/${files.length}: ${file.name} (${Math.round((bytesProcessed / totalBytes) * 100)}%)`,
+                totalPercent
+              );
+            }
+          });
           const filteredRows = res.totalRows - res.validRows;
           
           // Track time range for this file (use efficient iteration to avoid stack overflow)
@@ -627,6 +725,9 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       // Disable rebuild cache for huge datasets to avoid memory spikes
       lastRawCsvRows = null;
 
+      // Hide progress bar
+      hideProgress();
+
       if (combinedData.length === 0) {
         if (errors.length > 0) {
           setStatus(statusEl,`Failed to load files. ${errors.length} error(s) occurred.`);
@@ -669,109 +770,13 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       render(combinedData);
     } catch (err) {
       console.error(err);
+      hideProgress();
       setStatus(statusEl,'Failed to read CSV file(s).');
       clearChart();
     }
   });
 
 
-  // Allow user to upload a custom ip_map JSON (expected format: { "1.2.3.4": 123, ... } OR reverse { "123": "1.2.3.4" })
-  ipMapInput?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setStatus(statusEl,`Loading IP map ${file.name} …`);
-    try {
-      const text = await file.text();
-      const obj = JSON.parse(text);
-      const rev = new Map();
-      const entries = Object.entries(obj);
-      // Detect orientation: sample if keys look like IPs
-      let ipKeyMode = 0, numericKeyMode = 0;
-      for (const [k,v] of entries.slice(0,20)) {
-        if (/^\d+\.\d+\.\d+\.\d+$/.test(k) && Number.isFinite(Number(v))) ipKeyMode++;
-        if (!isNaN(+k) && typeof v === 'string' && /^\d+\.\d+\.\d+\.\d+$/.test(v)) numericKeyMode++;
-      }
-      if (ipKeyMode >= numericKeyMode) {
-        // ipString -> idNumber
-        for (const [ip,id] of entries) {
-          const num = Number(id);
-            if (Number.isFinite(num) && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) rev.set(num, ip);
-        }
-      } else {
-        // idNumber -> ipString
-        for (const [idStr, ip] of entries) {
-          const num = Number(idStr);
-          if (Number.isFinite(num) && /^\d+\.\d+\.\d+\.\d+$/.test(ip)) rev.set(num, ip);
-        }
-      }
-      ipIdToAddr = rev;
-      ipMapLoaded = true;
-      console.log(`Custom IP map loaded with ${rev.size} entries`);
-      console.log('Sample entries:', Array.from(rev.entries()).slice(0, 5));
-      setStatus(statusEl,`Custom IP map loaded (${rev.size} entries). Re-rendering…`);
-      if (lastRawCsvRows) {
-        // Reset legend state for updated mappings
-        originalData = null;
-        cachedOriginalLinks = null; // Clear cached links
-        visibleAttacks.clear();
-        // rebuild to decode IP ids again
-        render(rebuildDataFromRawRows(lastRawCsvRows));
-      }
-    } catch (err) {
-      console.error(err);
-      setStatus(statusEl,'Failed to parse IP map JSON.');
-    }
-  });
-
-  // Allow user to upload a custom event_type_mapping JSON (expected format: { "attack_name": 123, ... } OR reverse { "123": "attack_name" })
-  eventMapInput?.addEventListener('change', async (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setStatus(statusEl,`Loading event type map ${file.name} …`);
-    try {
-      const text = await file.text();
-      const obj = JSON.parse(text);
-      const rev = new Map();
-      const entries = Object.entries(obj);
-      
-      // Detect orientation: sample if keys look like numbers (IDs) or strings (names)
-      let nameKeyMode = 0, idKeyMode = 0;
-      for (const [k, v] of entries.slice(0, 20)) {
-        if (typeof k === 'string' && !isNaN(+v) && Number.isFinite(Number(v))) nameKeyMode++;
-        if (!isNaN(+k) && typeof v === 'string') idKeyMode++;
-      }
-      
-      if (nameKeyMode >= idKeyMode) {
-        // name -> id format: { "attack_name": 123 }
-        for (const [name, id] of entries) {
-          const num = Number(id);
-          if (Number.isFinite(num)) rev.set(num, name);
-        }
-      } else {
-        // id -> name format: { "123": "attack_name" }
-        for (const [idStr, name] of entries) {
-          const num = Number(idStr);
-          if (Number.isFinite(num) && typeof name === 'string') rev.set(num, name);
-        }
-      }
-      
-      attackIdToName = rev;
-      console.log(`Custom event type map loaded with ${rev.size} entries`);
-      console.log('Sample entries:', Array.from(rev.entries()).slice(0, 5));
-      setStatus(statusEl,`Custom event type map loaded (${rev.size} entries). Re-rendering…`);
-      if (lastRawCsvRows) {
-        // Reset legend state for updated mappings
-        originalData = null;
-        cachedOriginalLinks = null; // Clear cached links
-        visibleAttacks.clear();
-        // rebuild to decode attack IDs again
-        render(rebuildDataFromRawRows(lastRawCsvRows));
-      }
-    } catch (err) {
-      console.error(err);
-      setStatus(statusEl,'Failed to parse event type map JSON.');
-    }
-  });
 
   // Keep last raw CSV rows so we can rebuild when mappings change
   let lastRawCsvRows = null; // array of raw objects from csvParse
@@ -923,12 +928,51 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
   // Use d3 formatters consistently; we prefer UTC to match axis
 
+  // Update label mode without recomputing layout
+  function updateLabelMode() {
+    if (!cachedOriginalLinks || !currentArcPaths) {
+      console.warn('Cannot update label mode - missing data or arcs');
+      return;
+    }
+
+    const activeLabelKey = labelMode === 'force_layout' ? 'attack_group' : 'attack';
+    console.log(`Switching to ${activeLabelKey} label mode (lightweight update)`);
+
+    // Helper to get color for current label mode
+    const colorForAttack = (name) => {
+      if (labelMode === 'force_layout') return _lookupAttackGroupColor(name) || _lookupAttackColor(name) || DEFAULT_COLOR;
+      return _lookupAttackColor(name) || _lookupAttackGroupColor(name) || DEFAULT_COLOR;
+    };
+
+    // 1. Update arc data attributes (for filtering)
+    currentArcPaths.attr('data-attack', d => d[activeLabelKey] || 'normal');
+
+    // 2. Update gradient colors
+    svg.selectAll('linearGradient').each(function(d) {
+      const grad = d3.select(this);
+      grad.select('stop:first-child')
+        .attr('stop-color', colorForAttack(d[activeLabelKey] || 'normal'));
+    });
+
+    // 3. Rebuild legend with new attack list
+    const attacks = Array.from(new Set(cachedOriginalLinks.map(l => l[activeLabelKey] || 'normal'))).sort();
+
+    // Reset visible attacks to show all attacks in new mode
+    visibleAttacks.clear();
+    attacks.forEach(a => visibleAttacks.add(a));
+    currentLabelMode = labelMode;
+
+    buildLegend(attacks, colorForAttack);
+
+    console.log(`Label mode updated: ${attacks.length} ${activeLabelKey} types`);
+  }
+
   // Function to filter data based on visible attacks and re-render
   // Also used by resize handler to re-render current view (filtered or unfiltered)
-  function applyAttackFilter() {
+  async function applyAttackFilter() {
     if (!originalData || originalData.length === 0) return;
 
-    const activeLabelKey = labelMode === 'attack_group' ? 'attack_group' : 'attack';
+    const activeLabelKey = labelMode === 'force_layout' ? 'attack_group' : 'attack';
 
     // Get all possible attacks from original data
     const allAttacks = new Set(originalData.map(d => d[activeLabelKey] || 'normal'));
@@ -949,8 +993,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
     // Set flag to prevent overwriting originalData during filtered render
     isRenderingFilteredData = true;
-    // Re-render with filtered data (this will recompute the entire layout)
-    render(filteredData);
+    // Re-render with filtered data (reuses cached layout, skips simulation)
+    await render(filteredData);
     // Reset flag after render completes
     isRenderingFilteredData = false;
   }
@@ -974,9 +1018,12 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     });
   }
 
-  function render(data) {
+  async function render(data) {
+    // Increment generation to cancel any in-flight async render
+    const thisGeneration = ++renderGeneration;
+
     // === CLEANUP: Clear all previous render state before starting ===
-    // Clear SVG elements to prevent DOM bloat
+    // Clear all SVG elements
     svg.selectAll('*').remove();
 
     // Clear axis SVG (don't use const to avoid duplicate declaration later)
@@ -998,6 +1045,9 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     // Clear arc paths reference
     currentArcPaths = null;
 
+    // Clear bifocal handles reference so they get recreated (bifocalState is preserved)
+    bifocalHandles = null;
+
     console.log('Render cleanup completed - SVG, axis, and state cleared');
     // === END CLEANUP ===
 
@@ -1005,13 +1055,14 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     // Don't overwrite originalData if we're rendering filtered data
     if (!isRenderingFilteredData && (!originalData || visibleAttacks.size === 0)) {
       originalData = data;
-      // Clear cached links since we have new original data
+      // Clear cached links and layout since we have new original data
       cachedOriginalLinks = null;
+      cachedLayoutResult = null;
       console.log('Stored original data:', originalData.length, 'records');
     }
 
     // Determine which label dimension we use (attack vs group) for legend and coloring
-    const activeLabelKey = labelMode === 'attack_group' ? 'attack_group' : 'attack';
+    const activeLabelKey = labelMode === 'force_layout' ? 'attack_group' : 'attack';
 
     // Determine timestamp handling
     const tsMin = d3.min(data, d => d.timestamp);
@@ -1056,7 +1107,17 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     const nodes = nodeData.nodes;
     const ips = nodes.map(n => n.name);
     const { simNodes, simLinks, yMap, components, ipToComponent } = nodeData;
-    
+
+    // Initialize component expansion state (default: all collapsed)
+    if (!isRenderingFilteredData && components && components.length > 1) {
+      if (componentExpansionState.size === 0) {
+        components.forEach((comp, idx) => {
+          componentExpansionState.set(idx, false); // All collapsed by default
+        });
+        console.log(`Initialized ${components.length} components as collapsed`);
+      }
+    }
+
     // Create simulation using the factory function
     const simulation = createForceSimulation(d3, simNodes, simLinks);
     simulation._components = components;
@@ -1079,8 +1140,10 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     // Build attacks list from ORIGINAL data (not filtered) so legend always shows all attacks
     // Use cached originalLinks if available to avoid recomputing
     if (!cachedOriginalLinks && originalData) {
-      cachedOriginalLinks = computeLinks(originalData);
-      console.log('Computed and cached originalLinks:', cachedOriginalLinks.length, 'links');
+      // If rendering unfiltered data, reuse already-computed links instead of recomputing
+      cachedOriginalLinks = (data === originalData) ? links : computeLinks(originalData);
+      console.log('Cached originalLinks:', cachedOriginalLinks.length, 'links',
+        data === originalData ? '(reused)' : '(computed)');
     }
     const originalLinks = cachedOriginalLinks || links;
     const attacks = Array.from(new Set(originalLinks.map(l => l[activeLabelKey] || 'normal'))).sort();
@@ -1157,18 +1220,10 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
     const x = createTimeScale(d3, xMinDate, xMaxDate, xStart, xEnd);
 
-    // Calculate base gap for lens calculations
-    XGAP_BASE = timelineWidth / (tsMax - tsMin);
-
-    // Initialize lens center to middle of data range
-    if (lensCenter === 0 || lensCenter < tsMin || lensCenter > tsMax) {
-      lensCenter = (tsMin + tsMax) / 2;
-    }
-
     // Track the current xEnd value (will be updated after arc radius calculation)
     let currentXEnd = xEnd;
 
-    // Lens-aware x scale function using imported factory
+    // Bifocal-aware x scale function using imported factory
     const xScaleLens = createLensXScale({
       xScale: x,
       tsMin,
@@ -1176,11 +1231,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       xStart,
       xEnd: xEnd, // Use initial xEnd, will be updated via getter
       toDate,
-      getIsLensing: () => isLensing,
-      getLensCenter: () => lensCenter,
-      getLensingMul: () => lensingMul,
-      getHorizontalFisheyeScale: () => horizontalFisheyeScale,
-      getFisheyeEnabled: () => fisheyeEnabled,
+      getBifocalEnabled: () => bifocalEnabled,
+      getBifocalState: () => bifocalState,
       getXEnd: () => currentXEnd // Dynamic getter for updated xEnd
     });
 
@@ -1215,7 +1267,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     const lengthScale = d3.scaleLinear().domain([0, Math.max(1, maxLen)]).range([0.6, 2.2]);
 
     const colorForAttack = (name) => {
-      if (labelMode === 'attack_group') return _lookupAttackGroupColor(name) || _lookupAttackColor(name) || DEFAULT_COLOR;
+      if (labelMode === 'force_layout') return _lookupAttackGroupColor(name) || _lookupAttackColor(name) || DEFAULT_COLOR;
       return _lookupAttackColor(name) || _lookupAttackGroupColor(name) || DEFAULT_COLOR;
     };
 
@@ -1227,7 +1279,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       .domain([xMinDate, xMaxDate])
       .range([0, xEnd - xStart]);
     
-    const utcTick = d3.utcFormat('%Y-%m-%d %H:%M');
+    const utcTick = d3.utcFormat('%m-%d %H:%M');
     const xAxis = d3.axisTop(axisScale).ticks(looksAbsolute ? 7 : 7).tickFormat(d => {
       if (looksAbsolute) return utcTick(d);
       const relUnits = Math.round((d.getTime()) / unitMs);
@@ -1318,6 +1370,43 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     // Must be created after nodes are set up and positions are calculated
     const ipLabels = renderIpLabels(rows, allIps, ipToNode, MARGIN.left, yScaleLens);
 
+    // Hide labels for collapsed components
+    ipLabels
+      .style('opacity', d => {
+        const compIdx = ipToComponent.get(d);
+        if (compIdx === undefined) return 1; // Single component or no component info
+        return componentExpansionState.get(compIdx) === true ? 1 : 0;
+      });
+
+    // Render component expansion toggles (only for multi-component layouts)
+    let componentToggles = null;
+    if (components && components.length > 1) {
+      componentToggles = renderComponentToggles(
+        rows,
+        components,
+        ipToComponent,
+        yScaleLens,
+        MARGIN.left,
+        componentExpansionState,
+        (compIdx) => {
+          // Toggle callback
+          const wasExpanded = componentExpansionState.get(compIdx) === true;
+          componentExpansionState.set(compIdx, !wasExpanded);
+          console.log(`Component ${compIdx} ${wasExpanded ? 'collapsed' : 'expanded'}`);
+
+          // Update toggle visual immediately
+          updateComponentToggles(componentToggles, componentExpansionState);
+
+          // Re-render with new spacing
+          applyComponentLayout();
+        },
+        (compIdx) => {
+          // Export CSV callback for this component
+          exportComponentCSV(compIdx, components, ipToComponent, linksWithNodes, data);
+        }
+      );
+    }
+
     // Create per-link gradients from grey (source) to attack color (destination)
     const defs = svg.append('defs');
 
@@ -1337,7 +1426,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       g.selectAll('stop').remove();
       g.append('stop')
         .attr('offset', '0%')
-        .attr('stop-color', colorForAttack((labelMode==='attack_group'? d.attack_group : d.attack) || 'normal'));
+        .attr('stop-color', colorForAttack((labelMode==='force_layout'? d.attack_group : d.attack) || 'normal'));
       g.append('stop')
         .attr('offset', '100%')
         .attr('stop-color', NEUTRAL_GREY);
@@ -1349,7 +1438,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       .data(linksWithNodes)
       .join('path')
       .attr('class', 'arc')
-      .attr('data-attack', d => (labelMode === 'attack_group' ? d.attack_group : d.attack) || 'normal')
+      .attr('data-attack', d => (labelMode === 'force_layout' ? d.attack_group : d.attack) || 'normal')
       .attr('stroke', d => `url(#${gradIdForLink(d)})`)
       .attr('stroke-width', d => widthScale(Math.max(1, d.count)))
       .attr('d', d => {
@@ -1397,7 +1486,9 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       unitSuffix,
       base,
       getLabelsCompressedMode: () => labelsCompressedMode,
-      marginLeft: MARGIN.left
+      marginLeft: MARGIN.left,
+      ipToComponent,
+      getComponentExpansionState: () => componentExpansionState
     });
 
     const arcMoveHandler = createArcMoveHandler({ tooltip });
@@ -1410,7 +1501,9 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       hideTooltip: () => hideTooltip(tooltip),
       yScaleLens: (ip) => yScaleLens(ip),
       getLabelsCompressedMode: () => labelsCompressedMode,
-      marginLeft: MARGIN.left
+      marginLeft: MARGIN.left,
+      ipToComponent,
+      getComponentExpansionState: () => componentExpansionState
     });
 
     attachArcHandlers(arcPaths, arcHoverHandler, arcMoveHandler, arcLeaveHandler);
@@ -1430,19 +1523,13 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       brush = d3.brush()
         .extent([[MARGIN.left, MARGIN.top], [width + MARGIN.left, MARGIN.top + INNER_HEIGHT]])
         .on('start', function(event) {
-          // Disable fisheye during brushing to prevent conflicts
-          if (fisheyeEnabled) {
-            fisheyeEnabled = false;
-            updateLensingButtonState();
-          }
           updateBrushStatus('Selecting...', true);
         })
         .on('brush', function(event) {
           if (!event.selection) return;
           const [[x0, y0], [x1, y1]] = event.selection;
           brushSelection = { x0, y0, x1, y1 };
-          // Lightweight update during drag
-          updateSelectionDuringBrush(x0, y0, x1, y1);
+          // No preview calculation - show result after drag completes
         })
         .on('end', function(event) {
           // The brush 'end' event fires when:
@@ -1584,31 +1671,6 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       });
     };
 
-    // Lightweight selection update during brush drag (for responsive feedback)
-    const updateSelectionDuringBrush = (x0, y0, x1, y1) => {
-      // Count arcs during drag for visual feedback
-      let arcCount = 0;
-      let ipSet = new Set();
-
-      linksWithNodes.forEach(link => {
-        const xp = xScaleLens(link.minute);
-        const arcSourceY = yScaleLens(link.sourceNode.name);
-        const arcTargetY = yScaleLens(link.targetNode.name);
-
-        const xIntersects = xp >= x0 && xp <= x1;
-        const sourceInBrush = arcSourceY >= y0 && arcSourceY <= y1;
-        const targetInBrush = arcTargetY >= y0 && arcTargetY <= y1;
-
-        if (xIntersects && sourceInBrush && targetInBrush) {
-          arcCount++;
-          ipSet.add(link.sourceNode.name);
-          ipSet.add(link.targetNode.name);
-        }
-      });
-
-      updateBrushStatus(`${arcCount} arcs, ${ipSet.size} IPs`, true);
-    };
-
     // Finalize brush selection - called when drag ends
     const finalizeBrushSelection = (x0, y0, x1, y1) => {
       console.log('Finalizing brush selection:', { x0, y0, x1, y1 });
@@ -1618,6 +1680,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       selectedIps.clear();
       let minTime = Infinity;
       let maxTime = -Infinity;
+      let minY = Infinity;
+      let maxY = -Infinity;
 
       linksWithNodes.forEach(link => {
         const xp = xScaleLens(link.minute);
@@ -1636,6 +1700,12 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
           if (link.minute < minTime) minTime = link.minute;
           if (link.minute > maxTime) maxTime = link.minute;
+
+          // Track Y bounds based on IP positions (not arc positions)
+          const srcY = yScaleLens(link.sourceNode.name);
+          const dstY = yScaleLens(link.targetNode.name);
+          minY = Math.min(minY, srcY, dstY);
+          maxY = Math.max(maxY, srcY, dstY);
         }
       });
 
@@ -1653,11 +1723,12 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
           timeRange: selectionTimeRange
         });
 
-        // Persist this selection
+        // Persist this selection with time-based bounds
         const selectionId = ++selectionIdCounter;
         const persistedSelection = {
           id: selectionId,
-          bounds: { x0, y0, x1, y1 },
+          // Store time and IP-based bounds instead of pixel bounds
+          timeBounds: { minTime, maxTime, minY, maxY },
           arcs: [...selectedArcs],
           ips: new Set(selectedIps),
           timeRange: { ...selectionTimeRange }
@@ -1687,8 +1758,14 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     const createPersistentSelectionVisual = (selection) => {
       if (!multiSelectionsGroup) return;
 
-      const { id, bounds, arcs, ips } = selection;
-      const { x0, y0, x1, y1 } = bounds;
+      const { id, timeBounds, arcs, ips } = selection;
+      const { minTime, maxTime, minY, maxY } = timeBounds;
+
+      // Convert time bounds to current pixel positions using xScaleLens
+      const x0 = xScaleLens(minTime);
+      const x1 = xScaleLens(maxTime);
+      const y0 = minY;
+      const y1 = maxY;
 
       // Create a group for this selection
       const selGroup = multiSelectionsGroup.append('g')
@@ -1697,10 +1774,11 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
       // Draw the selection rectangle
       selGroup.append('rect')
+        .attr('class', 'selection-rect')
         .attr('x', x0)
         .attr('y', y0)
-        .attr('width', x1 - x0)
-        .attr('height', y1 - y0)
+        .attr('width', Math.max(1, x1 - x0))
+        .attr('height', Math.max(1, y1 - y0))
         .style('fill', '#28a745')
         .style('fill-opacity', 0.1)
         .style('stroke', '#28a745')
@@ -1709,6 +1787,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
       // Add selection label
       selGroup.append('text')
+        .attr('class', 'selection-label')
         .attr('x', x0 + 5)
         .attr('y', y0 + 14)
         .style('font-size', '10px')
@@ -1718,6 +1797,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
       // Create button container using foreignObject
       const btnContainer = selGroup.append('foreignObject')
+        .attr('class', 'selection-buttons')
         .attr('x', x1 + 5)
         .attr('y', y0)
         .attr('width', 120)
@@ -1799,6 +1879,42 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       }
 
       console.log(`Removed persistent selection #${id}, ${persistentSelections.length} remaining`);
+    };
+
+    // Update all persistent selection visuals when scale changes (bifocal)
+    const updatePersistentSelectionVisuals = () => {
+      if (!multiSelectionsGroup) return;
+
+      persistentSelections.forEach(selection => {
+        const { id, timeBounds, arcs, ips } = selection;
+        const { minTime, maxTime, minY, maxY } = timeBounds;
+
+        // Recompute pixel positions using current xScaleLens
+        const x0 = xScaleLens(minTime);
+        const x1 = xScaleLens(maxTime);
+        const y0 = minY;
+        const y1 = maxY;
+
+        const selGroup = multiSelectionsGroup.select(`.selection-${id}`);
+        if (selGroup.empty()) return;
+
+        // Update rectangle position and size
+        selGroup.select('.selection-rect')
+          .attr('x', x0)
+          .attr('y', y0)
+          .attr('width', Math.max(1, x1 - x0))
+          .attr('height', Math.max(1, y1 - y0));
+
+        // Update label position
+        selGroup.select('.selection-label')
+          .attr('x', x0 + 5)
+          .attr('y', y0 + 14);
+
+        // Update button container position
+        selGroup.select('.selection-buttons')
+          .attr('x', x1 + 5)
+          .attr('y', y0);
+      });
     };
 
     const disableBrushFn = () => {
@@ -2022,164 +2138,11 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       }
     };
 
-    const exportBrushSelectionFn = () => {
-      if (selectedArcs.length === 0) {
-        alert('No arcs selected. Use brush tool to select arcs first.');
-        return;
-      }
-
-      if (!currentTimeInfo) {
-        alert('Time information not available. Please load data first.');
-        return;
-      }
-
-      const { unit, looksAbsolute, unitMs, base, activeLabelKey } = currentTimeInfo;
-
-      // Convert IPs to the format expected by the Python script
-      // If IPs are in dotted-quad format, we may need to convert to IDs
-      // For now, we'll pass them as-is
-      const ipList = Array.from(selectedIps).join(',');
-
-      // Convert time range to microseconds (assuming data is in minutes since epoch)
-      // Check the timestamp unit from timeInfo
-      let timeStartUs, timeEndUs;
-      
-      if (looksAbsolute) {
-        // Data is in absolute time units
-        if (unit === 'microseconds') {
-          timeStartUs = Math.floor(selectionTimeRange.min);
-          timeEndUs = Math.ceil(selectionTimeRange.max);
-        } else if (unit === 'milliseconds') {
-          timeStartUs = Math.floor(selectionTimeRange.min * 1000);
-          timeEndUs = Math.ceil(selectionTimeRange.max * 1000);
-        } else if (unit === 'seconds') {
-          timeStartUs = Math.floor(selectionTimeRange.min * 1_000_000);
-          timeEndUs = Math.ceil(selectionTimeRange.max * 1_000_000);
-        } else if (unit === 'minutes') {
-          timeStartUs = Math.floor(selectionTimeRange.min * 60_000_000);
-          timeEndUs = Math.ceil(selectionTimeRange.max * 60_000_000);
-        } else {
-          // hours
-          timeStartUs = Math.floor(selectionTimeRange.min * 3_600_000_000);
-          timeEndUs = Math.ceil(selectionTimeRange.max * 3_600_000_000);
-        }
-      } else {
-        // Relative time - convert to absolute based on base
-        const baseMs = base * unitMs;
-        timeStartUs = Math.floor((baseMs + selectionTimeRange.min * unitMs) * 1000);
-        timeEndUs = Math.ceil((baseMs + selectionTimeRange.max * unitMs) * 1000);
-      }
-
-      // Determine primary attack type in selection
-      const attackCounts = new Map();
-      selectedArcs.forEach(arc => {
-        const attack = arc[activeLabelKey] || 'normal';
-        attackCounts.set(attack, (attackCounts.get(attack) || 0) + 1);
-      });
-      let primaryAttack = 'normal';
-      let maxCount = 0;
-      attackCounts.forEach((count, attack) => {
-        if (count > maxCount) {
-          maxCount = count;
-          primaryAttack = attack;
-        }
-      });
-
-      // Smart file detection: determine which files cover the selection time range
-      const fileDetection = getFilesForTimeRange(selectionTimeRange.min, selectionTimeRange.max);
-      
-      // Build data file argument
-      const dataFilesArg = fileDetection.detected 
-        ? fileDetection.suggestion 
-        : '<INPUT_CSV_FILES>';
-      
-      // Format time range for display
-      const timeRangeDisplay = formatTimeRangeForDisplay(
-        selectionTimeRange.min, 
-        selectionTimeRange.max, 
-        currentTimeInfo
-      );
-
-      // Generate command line for tcp_data_loader_parquet.py
-      // Create output directory name from attack type
-      const outputDirName = `tcp_data_${primaryAttack.replace(/[^a-z0-9]/gi, '_')}_selection`;
-      const ipMapPath = datasetConfig.ipMapPath || '<IP_MAP_JSON>';
-
-      // Single-line command (works on all platforms - Windows, Mac, Linux)
-      const commandSingleLine = `python tcp_data_loader_parquet.py --data ${dataFilesArg} --ip-map ${ipMapPath} --output-dir ./${outputDirName} --filter-ips "${ipList}" --filter-time-start ${timeStartUs} --filter-time-end ${timeEndUs} --attack-context "${primaryAttack}" --flow-chunk-size 200 --flow-timeout-seconds 300`;
-
-      // Multi-line command for readability (Unix/Mac - uses backslash continuation)
-      const commandUnix = `python tcp_data_loader_parquet.py \\
-  --data ${dataFilesArg} \\
-  --ip-map ${ipMapPath} \\
-  --output-dir ./${outputDirName} \\
-  --filter-ips "${ipList}" \\
-  --filter-time-start ${timeStartUs} \\
-  --filter-time-end ${timeEndUs} \\
-  --attack-context "${primaryAttack}" \\
-  --flow-chunk-size 200 \\
-  --flow-timeout-seconds 300`;
-
-      // Multi-line command for Windows PowerShell (uses backtick continuation)
-      const commandWindows = `python tcp_data_loader_parquet.py \`
-  --data ${dataFilesArg} \`
-  --ip-map ${ipMapPath} \`
-  --output-dir ./${outputDirName} \`
-  --filter-ips "${ipList}" \`
-  --filter-time-start ${timeStartUs} \`
-  --filter-time-end ${timeEndUs} \`
-  --attack-context "${primaryAttack}" \`
-  --flow-chunk-size 200 \`
-  --flow-timeout-seconds 300`;
-
-      // Create export dialog with command and JSON data
-      const exportData = {
-        selection: {
-          arcs: selectedArcs.length,
-          ips: Array.from(selectedIps),
-          ip_count: selectedIps.size,
-          time_range: {
-            min: selectionTimeRange.min,
-            max: selectionTimeRange.max,
-            min_us: timeStartUs,
-            max_us: timeEndUs,
-            duration: selectionTimeRange.max - selectionTimeRange.min,
-            display: timeRangeDisplay
-          },
-          primary_attack: primaryAttack,
-          attack_distribution: Object.fromEntries(attackCounts)
-        },
-        data_files: {
-          detected: fileDetection.detected,
-          files: fileDetection.files,
-          details: fileDetection.details || null,
-          note: fileDetection.note || null
-        },
-        commands: {
-          single_line: commandSingleLine,
-          unix: commandUnix,
-          windows: commandWindows
-        },
-        filter_parameters: {
-          data_files: fileDetection.suggestion,
-          ip_map: datasetConfig.ipMapPath,
-          filter_ips: ipList,
-          filter_time_start: timeStartUs,
-          filter_time_end: timeEndUs,
-          attack_context: primaryAttack,
-          flow_chunk_size: 200
-        }
-      };
-
-      // Create and show modal dialog (pass single-line as default for easy copy)
-      showExportDialog(exportData, commandSingleLine);
-    };
 
     // Make functions globally accessible for button handlers
     window.enableBrushFn = enableBrushFn;
     window.disableBrushFn = disableBrushFn;
     window.clearBrushSelectionFn = clearBrushSelectionFn;
-    window.exportBrushSelectionFn = exportBrushSelectionFn;
 
     // Always set up drag-to-brush (no toggle needed - users drag to select)
     setupDragToBrush();
@@ -2191,7 +2154,9 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       svg,
       widthScale,
       showTooltip,
-      tooltip
+      tooltip,
+      ipToComponent,
+      getComponentExpansionState: () => componentExpansionState
     });
     const labelMoveHandler = createLabelMoveHandler(tooltip);
     const labelLeaveHandler = createLabelLeaveHandler({
@@ -2199,15 +2164,25 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       svg,
       widthScale,
       hideTooltip,
-      tooltip
+      tooltip,
+      ipToComponent,
+      getComponentExpansionState: () => componentExpansionState
     });
     attachLabelHoverHandlers(ipLabels, labelHoverHandler, labelMoveHandler, labelLeaveHandler);
 
     // Phase 1: Run force simulation for natural clustering with component separation
+    // Skip simulation on filtered re-renders — reuse cached IP ordering
+    const canReuseCachedLayout = isRenderingFilteredData && cachedLayoutResult;
+    if (canReuseCachedLayout) {
+      console.log('Reusing cached layout for filtered render');
+    }
     setStatus(statusEl,'Stabilizing network layout...');
     
     // Run simulation to completion immediately (not visually)
     const centerX = (MARGIN.left + width - MARGIN.right) / 2;
+
+    if (!canReuseCachedLayout) {
+    // --- BEGIN: Full simulation (only for new data) ---
     
     // Calculate degree (number of connections) for each IP from links using imported function
     const ipDegree = calculateIpDegrees(linksWithNodes);
@@ -2270,8 +2245,9 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
       // Stage 1: Run simulation with strong component separation
       simulation.alpha(0.4).restart();  // Increased from 0.3 for stronger force application
-      runUntilConverged(simulation, 350, 0.001);  // Increased from 300 for better convergence
-      
+      await runUntilConverged(simulation, 350, 0.001);  // Increased from 300 for better convergence
+      if (thisGeneration !== renderGeneration) return; // Stale render cancelled
+
       // Stage 2: Reduce component forces and allow internal optimization
       simulation.force('y').strength(0.4); // Reduce Y force strength
       simulation.force('componentSeparation', createWeakComponentSeparationForce(ipToComponent, simNodes, {
@@ -2281,7 +2257,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       
       // Continue simulation for internal optimization
       simulation.alpha(0.18).restart();  // Increased from 0.15 for stronger refinement
-      runUntilConverged(simulation, 225, 0.0005);  // Increased from 200 for better convergence
+      await runUntilConverged(simulation, 225, 0.0005);  // Increased from 200 for better convergence
+      if (thisGeneration !== renderGeneration) return; // Stale render cancelled
     } else {
       // Single component: use original positioning
       const componentCenter = (MARGIN.top + INNER_HEIGHT) / 2;
@@ -2339,8 +2316,9 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       
       // Run simulation for single component
       simulation.alpha(0.15).restart();
-      runUntilConverged(simulation, 200, 0.001);
-      
+      await runUntilConverged(simulation, 200, 0.001);
+      if (thisGeneration !== renderGeneration) return; // Stale render cancelled
+
       // Remove hub centering force
       if (hubIp) {
         simulation.force('hubCentering', null);
@@ -2401,28 +2379,75 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       }
     });
 
+    // --- END: Full simulation ---
+    // Cache the sorted IP ordering for filtered re-renders
+    const sortedIpsFull = [...allIps];
+    sortedIpsFull.sort((a, b) => (yMap.get(a) || 0) - (yMap.get(b) || 0));
+    cachedLayoutResult = { sortedIps: sortedIpsFull };
+    console.log('Cached layout result:', sortedIpsFull.length, 'IPs');
+    } // end if (!canReuseCachedLayout)
+
     // Phase 2: Animate from current positions to sorted timeline positions
     // This follows main.js detactTimeSeries() approach - sort by Y position
     setStatus(statusEl,'Animating to timeline...');
 
-    // Sort all IPs by their Y positions from force simulation (like main.js)
-    const sortedIps = [...allIps];
-    sortedIps.sort((a, b) => {
-      return (yMap.get(a) || 0) - (yMap.get(b) || 0);
-    });
+    // Use cached ordering, filtered to IPs present in current data
+    const currentIpSet = new Set(allIps);
+    const sortedIps = cachedLayoutResult.sortedIps.filter(ip => currentIpSet.has(ip));
 
     // Update module-level sorted IPs for use by export functions
     currentSortedIps = sortedIps.slice();
 
-    // Distribute evenly across available height (matching main.js detactTimeSeries)
-    // main.js uses: step = Math.min((height-25)/(numNode+1), 15) and y = 12 + i*step
-    // In main.js, 'height' is INNER_HEIGHT (780 - MARGIN.top - MARGIN.bottom) and MARGIN.top=0
-    // Match main.js exactly: use fixed max step of 15px, start at y=12 (relative to SVG, so add MARGIN.top)
+    // Distribute across available height with component-aware spacing
+    // For multi-component layouts: tighter spacing within components, larger gaps between
     const finalYMap = new Map();
-    const step = Math.min((INNER_HEIGHT - 25) / (sortedIps.length + 1), 15);
-    for (let i = 0; i < sortedIps.length; i++) {
-      finalYMap.set(sortedIps[i], MARGIN.top + 12 + i * step);
+    let dynamicInnerHeight;
+
+    if (components && components.length > 1) {
+      // Multi-component: group by component and use tighter internal spacing
+      const componentGroups = [];
+      sortedIps.forEach(ip => {
+        const compIdx = ipToComponent.get(ip);
+        if (compIdx !== undefined) {
+          if (!componentGroups[compIdx]) componentGroups[compIdx] = [];
+          componentGroups[compIdx].push(ip);
+        }
+      });
+
+      // Remove empty slots
+      const nonEmptyGroups = componentGroups.filter(g => g && g.length > 0);
+
+      const interComponentGap = INTER_COMPONENT_GAP; // Gap between components
+
+      let currentY = MARGIN.top + 12;
+      nonEmptyGroups.forEach((group, idx) => {
+        // Check expansion state (default collapsed)
+        const isExpanded = componentExpansionState.get(idx) === true;
+        const spacing = isExpanded ? MIN_IP_SPACING_WITHIN_COMPONENT : MIN_IP_SPACING;
+
+        group.forEach(ip => {
+          finalYMap.set(ip, currentY);
+          currentY += spacing;
+        });
+        // Add gap after component (except last)
+        if (idx < nonEmptyGroups.length - 1) {
+          currentY += interComponentGap;
+        }
+      });
+
+      dynamicInnerHeight = Math.max(INNER_HEIGHT, currentY - MARGIN.top + 25);
+    } else {
+      // Single component: uniform spacing
+      const step = Math.max(MIN_IP_SPACING, Math.min((INNER_HEIGHT - 25) / (sortedIps.length + 1), 15));
+      dynamicInnerHeight = Math.max(INNER_HEIGHT, 12 + sortedIps.length * step + 25);
+      for (let i = 0; i < sortedIps.length; i++) {
+        finalYMap.set(sortedIps[i], MARGIN.top + 12 + i * step);
+      }
     }
+
+    // Update SVG height to accommodate all IPs with minimum spacing
+    const dynamicHeight = MARGIN.top + dynamicInnerHeight + MARGIN.bottom;
+    svg.attr('height', dynamicHeight);
 
     // Create finalY function that returns the computed positions
     const finalY = (ip) => finalYMap.get(ip);
@@ -2553,7 +2578,13 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
         svg.selectAll('.ip-label')
           .attr('font-weight', null)
           .style('font-size', null)
-          .style('fill', '#343a40');
+          .style('fill', '#343a40')
+          .style('opacity', d => {
+            // Restore opacity based on component expansion state
+            const compIdx = ipToComponent.get(d);
+            if (compIdx === undefined) return 1;
+            return componentExpansionState.get(compIdx) === true ? 1 : 0;
+          });
       });
     
     // Animate labels to final positions (matching main.js updateTransition)
@@ -2572,6 +2603,11 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
         // Match main.js: position at xConnected (strongest connection time)
         const node = ipToNode.get(d);
         return node && node.xConnected !== undefined ? node.xConnected : MARGIN.left;
+      })
+      .style('opacity', d => {
+        const compIdx = ipToComponent.get(d);
+        if (compIdx === undefined) return 1;
+        return componentExpansionState.get(compIdx) === true ? 1 : 0;
       })
       .text(d => d); // Re-apply text in case order changed
     
@@ -2632,10 +2668,21 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
           // Update node positions to reflect the new evenly distributed y positions
           updateNodePositions();
 
-          // Initialize fisheye AFTER animation completes and positions are finalized
-          initFisheye();
+          // Update component toggle positions to match final layout
+          if (componentToggles && !componentToggles.empty()) {
+            componentToggles.attr('transform', d => `translate(8, ${finalY(d.ip)})`);
 
-          setStatus(statusEl,`${data.length} records • ${sortedIps.length} IPs • ${attacks.length} ${labelMode==='attack_group' ? 'attack groups' : 'attack types'}`);
+            // Show toggles now that visualization is stable
+            showComponentToggles(componentToggles, 400);
+          }
+
+          // Update brush extent to match dynamic height
+          if (brushGroup && brush) {
+            brush.extent([[MARGIN.left, MARGIN.top], [width + MARGIN.left, dynamicHeight]]);
+            brushGroup.call(brush);
+          }
+
+          setStatus(statusEl,`${data.length} records • ${sortedIps.length} IPs • ${attacks.length} ${labelMode==='force_layout' ? 'attack groups' : 'attack types'}`);
 
           // Generate IP communications list after data is fully loaded
           generateIPCommunicationsList(data, linksWithNodes, colorForAttack);
@@ -2725,6 +2772,16 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
           return node && node.xConnected !== undefined ? node.xConnected : MARGIN.left;
         });
 
+      // Animate component toggles to new positions
+      if (componentToggles && !componentToggles.empty()) {
+        componentToggles
+          .transition().duration(800)
+          .attr('transform', d => {
+            const yEnd = targetPositions.get(d.ip) ?? startYScale(d.ip);
+            return `translate(8, ${yEnd})`;
+          });
+      }
+
       arcPaths.transition().duration(800)
         .attrTween('d', function(d) {
           const xp = xScaleLens(d.minute);
@@ -2788,578 +2845,131 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       });
     }
 
-    // Toggle lens magnification
-    function toggleLensing() {
-      isLensing = !isLensing;
-      console.log('Lens toggled:', isLensing, 'Center:', lensCenter);
+    // Apply component layout with current expansion state
+    function applyComponentLayout() {
+      // Recompute positions with current expansion state
+      const newFinalYMap = new Map();
+      let currentY = MARGIN.top + 12;
 
-      if (isLensing) {
-        // Add invisible overlay for mouse tracking - only on top axis timeline
-        axisSvg.append('rect')
-          .attr('class', 'lens-overlay')
-          .attr('x', xStart)
-          .attr('y', 0)
-          .attr('width', timelineWidth)
-          .attr('height', 36)
-          .style('fill', 'none')
-          .style('pointer-events', 'all')
-          .style('cursor', 'crosshair')
-          .on('mousemove', function(event) {
-            const [mx, my] = d3.pointer(event);
-            // Clamp mouse position to timeline area
-            const clampedX = Math.max(xStart, Math.min(mx, xStart + timelineWidth));
-            // Convert mouse X to timestamp
-            lensCenter = tsMin + ((clampedX - xStart) / timelineWidth) * (tsMax - tsMin);
-            updateLensVisualization();
+      if (components && components.length > 1) {
+        const componentGroups = [];
+        sortedIps.forEach(ip => {
+          const compIdx = ipToComponent.get(ip);
+          if (compIdx !== undefined) {
+            if (!componentGroups[compIdx]) componentGroups[compIdx] = [];
+            componentGroups[compIdx].push(ip);
+          }
+        });
+
+        const nonEmptyGroups = componentGroups.filter(g => g && g.length > 0);
+
+        nonEmptyGroups.forEach((group, idx) => {
+          const isExpanded = componentExpansionState.get(idx) === true;
+          const spacing = isExpanded ? MIN_IP_SPACING_WITHIN_COMPONENT : MIN_IP_SPACING;
+
+          group.forEach(ip => {
+            newFinalYMap.set(ip, currentY);
+            currentY += spacing;
           });
 
-      } else {
-        // Remove overlay when lens is disabled (matching main.js: only horizontal lensing)
-        axisSvg.select('.lens-overlay').remove();
-      }
-    }
-    
-    // Store reference to toggleLensing so button can trigger it
-    toggleLensingFn = toggleLensing;
-
-    // Initialize fisheye scale for vertical row distortion
-    // Now uses D3 fisheye plugin with Cartesian distortion
-    function initFisheye() {
-      // Store original row positions from current node positions
-      // This should be called AFTER the force simulation and auto-fit complete
-      originalRowPositions.clear();
-
-      // Use sortedIps order (from force simulation) not allIps
-      const ipsToUse = sortedIps && sortedIps.length > 0 ? sortedIps : allIps;
-      ipsToUse.forEach(ip => {
-        const node = ipToNode.get(ip);
-        const currentY = node && node.y !== undefined ? node.y : y(ip);
-        originalRowPositions.set(ip, currentY);
-      });
-
-      // Create D3 fisheye scales with Cartesian distortion
-      // For Y-axis: create a linear scale that maps IP indices to their Y positions
-      // We need to create a scale that preserves the actual positions
-      const yPositions = ipsToUse.map(ip => originalRowPositions.get(ip) || y(ip));
-      // Use efficient iteration to avoid stack overflow with large arrays
-      let yMin = Infinity;
-      let yMax = -Infinity;
-      for (let i = 0; i < yPositions.length; i++) {
-        const pos = yPositions[i];
-        if (isFinite(pos)) {
-          if (pos < yMin) yMin = pos;
-          if (pos > yMax) yMax = pos;
-        }
-      }
-      if (yMin === Infinity) yMin = 0;
-      if (yMax === -Infinity) yMax = 0;
-      
-      // Create a linear scale for Y-axis that maps IP index to Y position
-      // This allows D3 fisheye to work properly with continuous values
-      const yScaleForFisheye = d3.scaleLinear()
-        .domain([0, ipsToUse.length - 1])
-        .range([yMin, yMax]);
-      
-      // Create a mapping function that converts IP to index, then applies fisheye
-      const ipToIndex = new Map(ipsToUse.map((ip, idx) => [ip, idx]));
-      
-      // For X-axis: create a time scale for timestamps
-      const xScaleForFisheye = d3.scaleTime()
-        .domain([xMinDate, xMaxDate])
-        .range([xStart, currentXEnd]);
-
-      // Create D3 fisheye scales using the plugin with Cartesian distortion
-      // For Y-axis: create fisheye scale that works with IP indices
-      const fisheyeYScaleBase = createD3FisheyeYScale({
-        yScale: yScaleForFisheye,
-        distortion: fisheyeDistortion,
-        getDistortion: () => fisheyeDistortion
-      });
-      
-      // Wrap the fisheye Y scale to work with IPs instead of indices
-      const fisheyeYScale = (ip) => {
-        const idx = ipToIndex.get(ip);
-        if (idx === undefined) return originalRowPositions.get(ip) || y(ip);
-        return fisheyeYScaleBase(idx);
-      };
-
-      // For X-axis: create D3 fisheye scale
-      const fisheyeXScale = createD3FisheyeXScale({
-        xScale: xScaleForFisheye,
-        distortion: fisheyeDistortion,
-        getDistortion: () => fisheyeDistortion
-      });
-
-      // Create Cartesian fisheye (combines X and Y) - this is the main interface
-      // Note: We'll create a wrapper that handles IP-to-index conversion for Y-axis
-      const cartesianFisheyeBase = createD3CartesianFisheye({
-        xScale: xScaleForFisheye,
-        yScale: yScaleForFisheye,
-        distortion: fisheyeDistortion,
-        getDistortion: () => fisheyeDistortion
-      });
-      
-      // Wrap Cartesian fisheye to work with IPs
-      const cartesianFisheye = {
-        fisheyeX: cartesianFisheyeBase.fisheyeX,
-        fisheyeY: (ip) => {
-          const idx = ipToIndex.get(ip);
-          if (idx === undefined) return originalRowPositions.get(ip) || y(ip);
-          return cartesianFisheyeBase.fisheyeY(idx);
-        },
-        focus: cartesianFisheyeBase.focus,
-        distortion: cartesianFisheyeBase.distortion
-      };
-
-      // Store both the old interface (for backward compatibility) and new D3 fisheye
-      // Keep the old interface for now to maintain compatibility
-      fisheyeScale = createFisheyeScale({
-        sortedIps: ipsToUse,
-        originalPositions: originalRowPositions,
-        marginTop: MARGIN.top,
-        innerHeight: INNER_HEIGHT,
-        getDistortion: () => fisheyeDistortion
-      });
-
-      // Store D3 fisheye scales for Cartesian distortion
-      fisheyeScale._d3FisheyeY = fisheyeYScale;
-      fisheyeScale._d3FisheyeX = fisheyeXScale;
-      fisheyeScale._d3Cartesian = cartesianFisheye;
-      fisheyeScale._yScaleForFisheye = yScaleForFisheye;
-      fisheyeScale._xScaleForFisheye = xScaleForFisheye;
-      fisheyeScale._ipToIndex = ipToIndex;
-
-      // Create horizontal fisheye scale using imported factory (for backward compatibility)
-      horizontalFisheyeScale = createHorizontalFisheyeScale({
-        xStart,
-        xEnd: currentXEnd,
-        tsMin,
-        tsMax,
-        getDistortion: () => fisheyeDistortion
-      });
-
-      console.log('D3 Fisheye initialized with Cartesian distortion:', {
-        numIps: ipsToUse.length,
-        focus: fisheyeScale._focus,
-        distortion: fisheyeDistortion,
-        hasD3Fisheye: !!fisheyeScale._d3Cartesian,
-        sampleOriginalPositions: Array.from(originalRowPositions.entries()).slice(0, 3)
-      });
-    }
-
-    // Determine which fisheye region the mouse is in
-    // Returns: { applyX: boolean, applyY: boolean, region: string }
-    function getFisheyeRegion(mouseX, mouseY) {
-      const isTopEdge = mouseY < FISHEYE_TOP_EDGE_THRESHOLD;
-      const isLeftEdge = mouseX < FISHEYE_LEFT_EDGE_THRESHOLD;
-
-      if (isTopEdge && !isLeftEdge) {
-        // Top edge: horizontal fisheye only (timeline)
-        return { applyX: true, applyY: false, region: 'top' };
-      } else if (isLeftEdge && !isTopEdge) {
-        // Left edge: vertical fisheye only (IP labels)
-        return { applyX: false, applyY: true, region: 'left' };
-      } else if (isTopEdge && isLeftEdge) {
-        // Corner: apply both
-        return { applyX: true, applyY: true, region: 'corner' };
-      } else {
-        // Middle area: apply both for smooth interaction
-        return { applyX: true, applyY: true, region: 'middle' };
-      }
-    }
-
-    // Update the fisheye mode indicator UI
-    function updateFisheyeModeIndicator(region) {
-      if (!fisheyeModeIndicator || !fisheyeModeText) return;
-
-      if (!fisheyeEnabled) {
-        fisheyeModeIndicator.style.display = 'none';
-        return;
-      }
-
-      fisheyeModeIndicator.style.display = 'flex';
-
-      let modeText = '';
-      let bgColor = '#f8f9fa';
-      let textColor = '#495057';
-
-      switch (region) {
-        case 'top':
-          modeText = '⟷ Horizontal (Timeline)';
-          bgColor = '#e7f3ff';
-          textColor = '#0056b3';
-          break;
-        case 'left':
-          modeText = '⇕ Vertical (IPs)';
-          bgColor = '#e7ffe7';
-          textColor = '#155724';
-          break;
-        case 'corner':
-        case 'middle':
-          modeText = '⤢ Both Axes';
-          bgColor = '#fff3cd';
-          textColor = '#856404';
-          break;
-      }
-
-      fisheyeModeText.textContent = modeText;
-      fisheyeModeIndicator.style.background = bgColor;
-      fisheyeModeIndicator.style.color = textColor;
-    }
-
-    // Apply fisheye distortion based on mouse position using D3 fisheye with Cartesian distortion
-    // Parameters control which axes are distorted
-    function applyFisheye(mouseX, mouseY, applyX = true, applyY = true) {
-      if (!fisheyeEnabled || !fisheyeScale) return;
-
-      // Use D3 fisheye Cartesian distortion if available
-      if (fisheyeScale._d3Cartesian) {
-        const cartesianFisheye = fisheyeScale._d3Cartesian;
-
-        // Update focus points for axes that are active
-        cartesianFisheye.focus(mouseX, mouseY);
-
-        // Use sortedIps (from force simulation) to maintain the original order
-        const ipsToUse = fisheyeScale._sortedIps || sortedIps || allIps;
-
-        // Transform row positions using D3 fisheye Y scale (only if applyY is true)
-        if (applyY) {
-          let prevY = -Infinity;
-          ipsToUse.forEach((ip) => {
-            // Apply D3 fisheye distortion to Y position
-            let distortedY = cartesianFisheye.fisheyeY(ip);
-
-            // Ensure monotonicity: each row must be at or below the previous row
-            if (distortedY <= prevY) {
-              distortedY = prevY + 1; // Minimum spacing of 1 pixel
-            }
-            prevY = distortedY;
-
-            // Update node positions
-            const node = ipToNode.get(ip);
-            if (node) {
-              node.y = distortedY;
-            }
-          });
-        } else {
-          // Restore original Y positions when not applying vertical fisheye
-          ipsToUse.forEach((ip) => {
-            const node = ipToNode.get(ip);
-            if (node) {
-              node.y = originalRowPositions.get(ip) || y(ip);
-            }
-          });
-        }
-
-        // Update horizontal fisheye for timeline (X-axis) - only if applyX is true
-        if (applyX && horizontalFisheyeScale) {
-          horizontalFisheyeScale.focus(mouseX);
-        }
-
-        console.log('Applied D3 fisheye Cartesian distortion:', {
-          mouseX,
-          mouseY,
-          applyX,
-          applyY,
-          distortion: cartesianFisheye.distortion()
+          if (idx < nonEmptyGroups.length - 1) {
+            currentY += INTER_COMPONENT_GAP;
+          }
         });
       } else {
-        // Fallback to old implementation for backward compatibility
-        // Update vertical fisheye focus point (only if applyY is true)
-        if (applyY) {
-          fisheyeScale.focus(mouseY);
-        }
-
-        // Update horizontal fisheye focus point (only if applyX is true)
-        if (applyX && horizontalFisheyeScale) {
-          horizontalFisheyeScale.focus(mouseX);
-        }
-
-        // Use sortedIps (from force simulation) to maintain the original order
-        const ipsToUse = fisheyeScale._sortedIps || sortedIps || allIps;
-
-        // Transform row positions (only if applyY is true)
-        if (applyY) {
-          let prevY = -Infinity;
-          ipsToUse.forEach((ip) => {
-            let distortedY = fisheyeScale.apply(ip);
-
-            // Ensure monotonicity: each row must be at or below the previous row
-            if (distortedY <= prevY) {
-              distortedY = prevY + 1; // Minimum spacing of 1 pixel
-            }
-            prevY = distortedY;
-
-            // Update node positions
-            const node = ipToNode.get(ip);
-            if (node) {
-              node.y = distortedY;
-            }
-          });
-        } else {
-          // Restore original Y positions when not applying vertical fisheye
-          ipsToUse.forEach((ip) => {
-            const node = ipToNode.get(ip);
-            if (node) {
-              node.y = originalRowPositions.get(ip) || y(ip);
-            }
-          });
+        // Single component - keep existing logic
+        const step = Math.max(MIN_IP_SPACING, Math.min((INNER_HEIGHT - 25) / (sortedIps.length + 1), 15));
+        for (let i = 0; i < sortedIps.length; i++) {
+          newFinalYMap.set(sortedIps[i], MARGIN.top + 12 + i * step);
         }
       }
+
+      const newDynamicHeight = Math.max(INNER_HEIGHT, currentY - MARGIN.top + 25);
+
+      // Animate to new positions (600ms)
+      const duration = 600;
 
       // Update row lines
       rows.selectAll('line')
-        .attr('y1', d => {
-          const node = ipToNode.get(d.ip);
-          return node ? node.y : y(d.ip);
-        })
-        .attr('y2', d => {
-          const node = ipToNode.get(d.ip);
-          return node ? node.y : y(d.ip);
-        });
+        .transition().duration(duration)
+        .attr('y1', d => newFinalYMap.get(d.ip))
+        .attr('y2', d => newFinalYMap.get(d.ip));
 
-      // Update IP labels
+      // Update labels (with opacity for collapsed)
       rows.selectAll('text')
-        .attr('y', d => {
-          const node = ipToNode.get(d);
-          return node ? node.y : y(d);
+        .transition().duration(duration)
+        .attr('y', d => newFinalYMap.get(d))
+        .style('opacity', d => {
+          const compIdx = ipToComponent.get(d);
+          if (compIdx === undefined) return 1;
+          return componentExpansionState.get(compIdx) === true ? 1 : 0;
         });
 
-      // Update arc paths with new Y positions and X positions (if using D3 fisheye)
-      arcPaths.attr('d', d => {
-        let xp;
-        // Use D3 fisheye X scale if available and applyX is true for horizontal distortion
-        if (applyX && fisheyeScale._d3Cartesian) {
-          const cartesianFisheye = fisheyeScale._d3Cartesian;
-          // Convert timestamp to Date for the fisheye X scale
-          const timestampDate = toDate(d.minute);
-          xp = cartesianFisheye.fisheyeX(timestampDate);
-        } else {
-          xp = xScaleLens(d.minute);
-        }
+      // Update component toggles
+      if (componentToggles && !componentToggles.empty()) {
+        componentToggles
+          .transition().duration(duration)
+          .attr('transform', d => `translate(8, ${newFinalYMap.get(d.ip)})`);
 
-        const y1 = ipToNode.get(d.sourceNode.name)?.y || y(d.sourceNode.name);
-        const y2 = ipToNode.get(d.targetNode.name)?.y || y(d.targetNode.name);
+        // Update toggle state (visual only - colors and icons)
+        updateComponentToggles(componentToggles, componentExpansionState);
+      }
 
-        // Update node positions for linkArc
-        d.source.x = xp;
-        d.source.y = y1;
-        d.target.x = xp;
-        d.target.y = y2;
+      // Update arcs
+      arcPaths.transition().duration(duration)
+        .attrTween('d', function(d) {
+          const xp = xScaleLens(d.minute);
+          const y1Start = yScaleLens(d.sourceNode.name);
+          const y2Start = yScaleLens(d.targetNode.name);
+          const y1End = newFinalYMap.get(d.sourceNode.name) ?? y1Start;
+          const y2End = newFinalYMap.get(d.targetNode.name) ?? y2Start;
 
-        return linkArc(d);
-      });
+          return function(t) {
+            const y1t = y1Start + (y1End - y1Start) * t;
+            const y2t = y2Start + (y2End - y2Start) * t;
+            d.source.x = xp;
+            d.source.y = y1t;
+            d.target.x = xp;
+            d.target.y = y2t;
+            return linkArc(d);
+          };
+        })
+        .on('end', function(d, i) {
+          if (i === 0) {
+            // Update yScaleLens to use new positions
+            evenlyDistributedYPositions = newFinalYMap;
+            // Update SVG height
+            svg.attr('height', newDynamicHeight);
+            // Update brush extent
+            if (brushGroup && brush) {
+              brush.extent([[MARGIN.left, MARGIN.top], [width + MARGIN.left, newDynamicHeight]]);
+              brushGroup.call(brush);
+            }
+          }
+        });
 
       // Update gradients
       linksWithNodes.forEach(d => {
-        let xp;
-        // Use D3 fisheye X scale if available and applyX is true for horizontal distortion
-        if (applyX && fisheyeScale._d3Cartesian) {
-          const cartesianFisheye = fisheyeScale._d3Cartesian;
-          const timestampDate = toDate(d.minute);
-          xp = cartesianFisheye.fisheyeX(timestampDate);
-        } else {
-          xp = xScaleLens(d.minute);
-        }
-
-        const y1 = ipToNode.get(d.sourceNode.name)?.y || y(d.sourceNode.name);
-        const y2 = ipToNode.get(d.targetNode.name)?.y || y(d.targetNode.name);
-
-        svg.select(`#${gradIdForLink(d)}`)
-          .attr('x1', xp)
-          .attr('x2', xp)
-          .attr('y1', y1)
-          .attr('y2', y2);
-      });
-
-      // Update time axis to reflect horizontal fisheye distortion (only if applyX is true)
-      if (applyX) {
-        updateTimeAxisWithFisheye();
-      }
-    }
-
-    // Update time axis based on horizontal fisheye distortion
-    function updateTimeAxisWithFisheye() {
-      if (!fisheyeEnabled || !horizontalFisheyeScale) return;
-
-      const axisSvg = d3.select('#axis-top');
-      const axisGroup = axisSvg.select('g');
-
-      // Create tick values
-      const tempScale = d3.scaleTime()
-        .domain([xMinDate, xMaxDate])
-        .range([0, xEnd - xStart]);
-
-      const tickValues = tempScale.ticks(7);
-
-      // Update tick positions based on horizontal fisheye
-      axisGroup.selectAll('.tick')
-        .data(tickValues, d => d.getTime()) // Use key function for data binding
-        .attr('transform', function(d) {
-          // Convert date to timestamp
-          let timestamp;
-          if (looksAbsolute) {
-            if (unit === 'microseconds') timestamp = d.getTime() * 1000;
-            else if (unit === 'milliseconds') timestamp = d.getTime();
-            else if (unit === 'seconds') timestamp = d.getTime() / 1000;
-            else if (unit === 'minutes') timestamp = d.getTime() / 60000;
-            else timestamp = d.getTime() / 3600000; // hours
-          } else {
-            timestamp = (d.getTime() / unitMs) + base;
-          }
-
-          // Apply horizontal fisheye
-          const newX = horizontalFisheyeScale.apply(timestamp) - xStart;
-          return `translate(${newX},0)`;
-        });
-    }
-
-    // Reset fisheye to original positions
-    function resetFisheye() {
-      if (!originalRowPositions.size) return;
-
-      // Use sortedIps (from force simulation) to maintain the original order
-      const ipsToUse = (fisheyeScale && fisheyeScale._sortedIps) || sortedIps || allIps;
-
-      // Restore original node positions
-      ipsToUse.forEach((ip) => {
-        const node = ipToNode.get(ip);
-        if (node) {
-          node.y = originalRowPositions.get(ip) || y(ip);
-        }
-      });
-
-      // Animate row lines back to original positions
-      rows.selectAll('line')
-        .transition()
-        .duration(200)
-        .attr('y1', d => {
-          const node = ipToNode.get(d.ip);
-          return node ? node.y : y(d.ip);
-        })
-        .attr('y2', d => {
-          const node = ipToNode.get(d.ip);
-          return node ? node.y : y(d.ip);
-        });
-
-      // Animate IP labels back to original positions
-      rows.selectAll('text')
-        .transition()
-        .duration(200)
-        .attr('y', d => {
-          const node = ipToNode.get(d);
-          return node ? node.y : y(d);
-        });
-
-      // Animate arcs back to original positions
-      arcPaths
-        .transition()
-        .duration(200)
-        .attr('d', d => {
-          const xp = xScaleLens(d.minute);
-          const y1 = ipToNode.get(d.sourceNode.name)?.y || y(d.sourceNode.name);
-          const y2 = ipToNode.get(d.targetNode.name)?.y || y(d.targetNode.name);
-
-          // Update node positions for linkArc
-          d.source.x = xp;
-          d.source.y = y1;
-          d.target.x = xp;
-          d.target.y = y2;
-
-          return linkArc(d);
-        });
-
-      // Animate gradients back to original positions
-      linksWithNodes.forEach(d => {
         const xp = xScaleLens(d.minute);
-        const y1 = ipToNode.get(d.sourceNode.name)?.y || y(d.sourceNode.name);
-        const y2 = ipToNode.get(d.targetNode.name)?.y || y(d.targetNode.name);
-
         svg.select(`#${gradIdForLink(d)}`)
-          .transition()
-          .duration(200)
-          .attr('x1', xp)
-          .attr('x2', xp)
-          .attr('y1', y1)
-          .attr('y2', y2);
+          .transition().duration(duration)
+          .attr('y1', newFinalYMap.get(d.sourceNode.name))
+          .attr('y2', newFinalYMap.get(d.targetNode.name));
       });
-
-      // Reset time axis to original positions
-      resetTimeAxis();
     }
 
-    // Reset time axis to original positions
-    function resetTimeAxis() {
-      const axisSvg = d3.select('#axis-top');
-      const axisGroup = axisSvg.select('g');
+    // Update visualization with current bifocal state
+    function updateBifocalVisualization() {
+      // During drag: immediate updates (no transitions) for responsiveness
+      const dragging = bifocalHandles && bifocalHandles.isDragging;
+      const dur = dragging ? 0 : 250;
 
-      // Create tick values
-      const tempScale = d3.scaleTime()
-        .domain([xMinDate, xMaxDate])
-        .range([0, xEnd - xStart]);
-
-      const tickValues = tempScale.ticks(7);
-
-      // Animate ticks back to original positions
-      axisGroup.selectAll('.tick')
-        .data(tickValues, d => d.getTime())
-        .transition()
-        .duration(200)
-        .attr('transform', function(d) {
-          // Use original x scale (without fisheye)
-          const originalX = tempScale(d);
-          return `translate(${originalX},0)`;
-        });
-    }
-
-    // Note: initFisheye() is now called AFTER the animation completes
-    // (see line ~2119 in the animation 'end' handler)
-
-    // Store reference to resetFisheye so button handler can call it
-    resetFisheyeFn = resetFisheye;
-
-    // Add mouse event handlers for fisheye
-    svg
-      .style('cursor', () => fisheyeEnabled ? 'crosshair' : 'default')
-      .on('mousemove', function(event) {
-        if (fisheyeEnabled) {
-          const [mouseX, mouseY] = d3.pointer(event);
-          currentMouseX = mouseX; // Store for potential axis updates
-
-          // Determine which region the mouse is in and apply appropriate fisheye
-          const region = getFisheyeRegion(mouseX, mouseY);
-          applyFisheye(mouseX, mouseY, region.applyX, region.applyY);
-
-          // Update fisheye mode indicator UI
-          updateFisheyeModeIndicator(region.region);
-
-          // Update cursor style based on region
-          if (region.region === 'top') {
-            svg.style('cursor', 'ew-resize'); // Horizontal resize cursor
-          } else if (region.region === 'left') {
-            svg.style('cursor', 'ns-resize'); // Vertical resize cursor
-          } else {
-            svg.style('cursor', 'crosshair'); // Default fisheye cursor
-          }
-        }
-      })
-      .on('mouseleave', function() {
-        // Don't reset on mouseleave - keep the fisheye effect
-        // User can use reset button to restore original positions
-        currentMouseX = null;
-      });
-
-    // Update visualization with current lens state
-    function updateLensVisualization() {
-      console.log('Updating lens visualization, isLensing:', isLensing, 'arcPaths:', arcPaths ? arcPaths.size() : 0);
-
-      // Animate arcs to new positions (matching main.js pattern)
-      arcPaths.transition().duration(250)
-        .attr('d', d => {
+      // Animate arcs to new positions
+      const arcSel = dur > 0 ? arcPaths.transition().duration(dur) : arcPaths;
+      arcSel.attr('d', d => {
           const xp = xScaleLens(d.minute);
           const y1 = yScaleLens(d.sourceNode.name);
           const y2 = yScaleLens(d.targetNode.name);
-          // Update node positions for linkArc (matching main.js)
           d.source.x = xp;
           d.source.y = y1;
           d.target.x = xp;
@@ -3367,79 +2977,128 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
           return linkArc(d);
         });
 
-      // Update gradients
-      linksWithNodes.forEach(d => {
-        const xp = xScaleLens(d.minute);
-        svg.select(`#${gradIdForLink(d)}`)
-          .transition().duration(250)
-          .attr('x1', xp)
-          .attr('x2', xp)
-          .attr('y1', yScaleLens(d.sourceNode.name))
-          .attr('y2', yScaleLens(d.targetNode.name));
-      });
+      // Update gradients (batch selection instead of per-link svg.select)
+      const gradSel = dur > 0
+        ? gradients.transition().duration(dur)
+        : gradients;
+      gradSel
+        .attr('x1', d => xScaleLens(d.minute))
+        .attr('x2', d => xScaleLens(d.minute))
+        .attr('y1', d => yScaleLens(d.sourceNode.name))
+        .attr('y2', d => yScaleLens(d.targetNode.name));
 
-      // Update row lines (both horizontal span and vertical position)
-      rows.selectAll('line')
-        .transition().duration(250)
+      // Update row lines
+      const lineSel = dur > 0
+        ? rows.selectAll('line').transition().duration(dur)
+        : rows.selectAll('line');
+      lineSel
         .attr('x1', d => d.span ? xScaleLens(d.span.min) : MARGIN.left)
         .attr('x2', d => d.span ? xScaleLens(d.span.max) : MARGIN.left)
         .attr('y1', d => yScaleLens(d.ip))
         .attr('y2', d => yScaleLens(d.ip));
 
-      // Update node positions first (xConnected depends on xScaleLens which may have changed)
+      // Update node positions
       updateNodePositions();
 
-      // Update IP label positions (matching main.js: no vertical lensing, just update Y from scale)
-      const labelSelection = rows.selectAll('text');
-      labelSelection
-        .transition().duration(250)
+      // Update IP label positions
+      const textSel = dur > 0
+        ? rows.selectAll('text').transition().duration(dur)
+        : rows.selectAll('text');
+      textSel
         .attr('y', d => yScaleLens(d))
         .attr('x', d => {
-          // Maintain xConnected position (first arc time) during lens updates
           const node = ipToNode.get(d);
           return node && node.xConnected !== undefined ? node.xConnected : MARGIN.left;
+        })
+        .style('opacity', d => {
+          const compIdx = ipToComponent.get(d);
+          if (compIdx === undefined) return 1;
+          return componentExpansionState.get(compIdx) === true ? 1 : 0;
         });
 
-      // Update label visibility based on compressed mode (matching main.js: no vertical lensing)
-      labelSelection.style('opacity', labelsCompressedMode ? 0 : 1);
+      // Update component toggle positions
+      if (componentToggles && !componentToggles.empty()) {
+        const toggleSel = dur > 0
+          ? componentToggles.transition().duration(dur)
+          : componentToggles;
+        toggleSel.attr('transform', d => `translate(8, ${yScaleLens(d.ip)})`);
+      }
 
-      // Update axis to follow lens transformation
+      // Update axis ticks
       const axisSvg = d3.select('#axis-top');
       const axisGroup = axisSvg.select('g');
 
-      // Create a temporary scale to get tick values
       const tempScale = d3.scaleTime()
         .domain([xMinDate, xMaxDate])
         .range([0, timelineWidth]);
 
       const tickValues = tempScale.ticks(7);
 
-      // Update tick positions based on lens
-      axisGroup.selectAll('.tick')
-        .data(tickValues)
-        .transition().duration(250)
-        .attr('transform', function(d) {
-          // d is a Date object
-          // Convert to timestamp in the data's unit
+      const tickSel = dur > 0
+        ? axisGroup.selectAll('.tick').data(tickValues).transition().duration(dur)
+        : axisGroup.selectAll('.tick').data(tickValues);
+      tickSel.attr('transform', function(d) {
           let timestamp;
           if (looksAbsolute) {
             if (unit === 'microseconds') timestamp = d.getTime() * 1000;
             else if (unit === 'milliseconds') timestamp = d.getTime();
             else if (unit === 'seconds') timestamp = d.getTime() / 1000;
             else if (unit === 'minutes') timestamp = d.getTime() / 60000;
-            else timestamp = d.getTime() / 3600000; // hours
+            else timestamp = d.getTime() / 3600000;
           } else {
             timestamp = (d.getTime() / unitMs) + base;
           }
 
-          // Calculate new position using lens
           const newX = xScaleLens(timestamp) - xStart;
           return `translate(${newX},0)`;
         });
+
+      // Update bifocal handles
+      if (bifocalHandles) {
+        bifocalHandles.updateHandlePositions();
+      }
+
+      // Update region indicator
+      updateBifocalRegionText();
+
+      // Update persistent brush selections
+      if (updatePersistentSelectionVisuals) {
+        updatePersistentSelectionVisuals();
+      }
     }
-    
-    // Store reference to updateLensVisualization so slider can trigger updates
-    updateLensVisualizationFn = updateLensVisualization;
+
+    // Store reference to updateBifocalVisualization
+    updateBifocalVisualizationFn = updateBifocalVisualization;
+
+    // Create bifocal drag handles in the sticky bifocal-bar SVG (not the scrollable chart SVG)
+    const bifocalBarSvg = d3.select('#bifocal-bar');
+    bifocalBarSvg
+      .attr('width', width + MARGIN.left + MARGIN.right)
+      .attr('height', 28);
+    bifocalBarSvg.selectAll('*').remove();
+    bifocalHandles = createBifocalHandles(bifocalBarSvg, {
+      xStart,
+      xEnd: currentXEnd,
+      axisY: 14,
+      chartHeight: 28,
+      getBifocalState: () => bifocalState,
+      onFocusChange: (newStart, newEnd) => {
+        const newState = updateFocusRegion(bifocalState, newStart, newEnd);
+        bifocalState = newState;
+        updateBifocalVisualization();
+      },
+      d3
+    });
+    bifocalHandles.show();
+
+    // Show and update region indicator
+    if (bifocalRegionIndicator) {
+      bifocalRegionIndicator.style.display = 'block';
+      updateBifocalRegionText();
+    }
+
+    // Re-initialize resize handler after render completes
+    resizeCleanup = setupWindowResizeHandler();
   }
 
   // Compute nodes array with connectivity metric akin to legacy computeNodes
@@ -3512,7 +3171,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       // Sort by earliest time (ascending - earliest first = top)
       ipArray.sort((a, b) => a.time - b.time);
 
-      const step = Math.min((INNER_HEIGHT - 25) / (ipArray.length + 1), 15);
+      const step = Math.max(MIN_IP_SPACING, Math.min((INNER_HEIGHT - 25) / (ipArray.length + 1), 15));
       ipArray.forEach((item, i) => {
         const newY = topMargin + 12 + i * step;
         yMap.set(item.ip, newY);
@@ -3560,16 +3219,17 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
     // Step 2: Calculate space allocation
     const minIPSpacing = 15;
-    const interComponentGap = 25; // Explicit gap between components
+    const interComponentGap = INTER_COMPONENT_GAP; // Explicit gap between components
 
     const numGaps = components.length - 1;
     const spaceForGaps = numGaps * interComponentGap;
     const spaceForIPs = INNER_HEIGHT - 25 - spaceForGaps;
 
     // Calculate IP spacing (may be less than minIPSpacing if crowded)
+    // Use tighter spacing within components to make each component visually distinct
     const ipStep = Math.max(
       Math.min(spaceForIPs / (numIPs + 1), minIPSpacing),
-      8 // Absolute minimum to prevent overlap
+      MIN_IP_SPACING_WITHIN_COMPONENT // Tighter spacing within same component
     );
 
     // Step 3: Position IPs component-by-component (in chronological order)
@@ -3632,28 +3292,18 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     // purely-normal background traffic does not connect unrelated
     // attack clusters. If everything is 'normal', fall back to using
     // the full link set.
-    const components = findConnectedComponents(
+    const topologicalComponents = findConnectedComponents(
       simNodes,
       componentLinks.length > 0 ? componentLinks : simLinks
     );
-    const ipToComponent = new Map();
-    components.forEach((comp, compIdx) => {
-      comp.forEach(ip => ipToComponent.set(ip, compIdx));
-    });
-    
-    // Debug: log component information
-    if (components.length > 1) {
-      console.log(`Detected ${components.length} disconnected components:`, 
-        components.map((comp, idx) => `Component ${idx}: ${comp.length} nodes`).join(', '));
+
+    // Debug: log topological component information
+    if (topologicalComponents.length > 1) {
+      console.log(`Detected ${topologicalComponents.length} topological components:`,
+        topologicalComponents.map((comp, idx) => `Component ${idx}: ${comp.length} nodes`).join(', '));
     }
 
-    // Return raw data for simulation - simulation will be created in render()
-    // using the imported createForceSimulation function
-    
-    // Initialize empty yMap - will be populated during render
-    const yMap = new Map();
-
-    // Primary attack per IP (exclude 'normal')
+    // Determine primary attack type for each IP first (needed for component merging)
     const ipAttackCounts = new Map(); // ip -> Map(attack->count)
     for (const l of links) {
       if (l.attack && l.attack !== 'normal'){
@@ -3670,6 +3320,70 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       let best='unknown',bestC=-1; for (const [att,c] of m.entries()) if (c>bestC){best=att;bestC=c;}
       primaryAttack.set(ip,best);
     }
+
+    // Merge components by attack type: components with the same primary attack type are merged
+    const componentPrimaryAttack = new Map(); // compIdx -> primary attack type
+    topologicalComponents.forEach((comp, compIdx) => {
+      // Find most common attack type in this component
+      const attackCounts = new Map();
+      comp.forEach(ip => {
+        const attack = primaryAttack.get(ip) || 'unknown';
+        attackCounts.set(attack, (attackCounts.get(attack) || 0) + 1);
+      });
+      let bestAttack = 'unknown', bestCount = -1;
+      for (const [attack, count] of attackCounts.entries()) {
+        if (count > bestCount) {
+          bestCount = count;
+          bestAttack = attack;
+        }
+      }
+      componentPrimaryAttack.set(compIdx, bestAttack);
+    });
+
+    // Group topological components by their primary attack type
+    const attackToComponents = new Map(); // attack -> [compIdx, ...]
+    componentPrimaryAttack.forEach((attack, compIdx) => {
+      if (!attackToComponents.has(attack)) attackToComponents.set(attack, []);
+      attackToComponents.get(attack).push(compIdx);
+    });
+
+    // Create merged components: flatten components with same attack type
+    const components = [];
+    const oldToNewComponentIdx = new Map(); // old compIdx -> new compIdx
+    attackToComponents.forEach((compIndices, attack) => {
+      const newCompIdx = components.length;
+      const mergedComponent = [];
+      compIndices.forEach(oldCompIdx => {
+        oldToNewComponentIdx.set(oldCompIdx, newCompIdx);
+        mergedComponent.push(...topologicalComponents[oldCompIdx]);
+      });
+      components.push(mergedComponent);
+    });
+
+    // Build ipToComponent mapping with merged components
+    const ipToComponent = new Map();
+    components.forEach((comp, compIdx) => {
+      comp.forEach(ip => ipToComponent.set(ip, compIdx));
+    });
+
+    // Debug: log merged component information
+    if (components.length > 1) {
+      console.log(`Merged ${topologicalComponents.length} topological components into ${components.length} attack-based components:`);
+      components.forEach((comp, idx) => {
+        const attack = componentPrimaryAttack.get(
+          Array.from(oldToNewComponentIdx.entries()).find(([old, newIdx]) => newIdx === idx)?.[0]
+        );
+        console.log(`  Component ${idx} (${attack}): ${comp.length} nodes`);
+      });
+    }
+
+    // Return raw data for simulation - simulation will be created in render()
+    // using the imported createForceSimulation function
+    
+    // Initialize empty yMap - will be populated during render
+    const yMap = new Map();
+
+    // Primary attack per IP was already computed above during component merging
 
     // Earliest time per attack type
     const earliest = new Map();
@@ -3808,295 +3522,57 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   }
 
   // Convert selection time to human-readable date range
-  function formatTimeRangeForDisplay(minTime, maxTime, timeInfo) {
-    if (!timeInfo) return `${minTime} - ${maxTime}`;
-    
-    const { looksAbsolute, unit, unitMs, base } = timeInfo;
-    
-    if (looksAbsolute) {
-      // Convert to JavaScript Date
-      let minDate, maxDate;
-      if (unit === 'microseconds') {
-        minDate = new Date(minTime / 1000);
-        maxDate = new Date(maxTime / 1000);
-      } else if (unit === 'milliseconds') {
-        minDate = new Date(minTime);
-        maxDate = new Date(maxTime);
-      } else if (unit === 'seconds') {
-        minDate = new Date(minTime * 1000);
-        maxDate = new Date(maxTime * 1000);
-      } else if (unit === 'minutes') {
-        minDate = new Date(minTime * 60000);
-        maxDate = new Date(maxTime * 60000);
-      } else {
-        minDate = new Date(minTime * 3600000);
-        maxDate = new Date(maxTime * 3600000);
-      }
-      
-      const formatter = new Intl.DateTimeFormat('en-US', {
-        year: 'numeric',
-        month: '2-digit',
-        day: '2-digit',
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone: 'UTC'
-      });
-      
-      return `${formatter.format(minDate)} - ${formatter.format(maxDate)} UTC`;
-    }
-    
-    return `t=${minTime} - t=${maxTime} (${timeInfo.unit})`;
-  }
-
   // Wrapper functions for decoders that provide global maps
   const _decodeAttack = (value) => decodeAttack(value, attackIdToName);
   const _decodeAttackGroup = (groupVal, fallbackVal) => decodeAttackGroup(groupVal, fallbackVal, attackGroupIdToName, attackIdToName);
   const _lookupAttackColor = (name) => lookupAttackColor(name, rawColorByAttack, colorByAttack);
   const _lookupAttackGroupColor = (name) => lookupAttackGroupColor(name, rawColorByAttackGroup, colorByAttackGroup);
 
-  // Export dialog for brush selection
-  function showExportDialog(exportData, command) {
-    // Create modal overlay
-    const overlay = document.createElement('div');
-    overlay.id = 'export-modal-overlay';
-    overlay.style.cssText = `
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 100%;
-      height: 100%;
-      background: rgba(0, 0, 0, 0.7);
-      z-index: 9998;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    `;
+  // Export network data for a specific connected component as CSV
+  function exportComponentCSV(compIdx, components, ipToComponent, linksWithNodes, data) {
+    if (!components || compIdx < 0 || compIdx >= components.length) {
+      console.warn('Invalid component index for export:', compIdx);
+      return;
+    }
 
-    // Create modal dialog
-    const modal = document.createElement('div');
-    modal.id = 'export-modal';
-    modal.style.cssText = `
-      background: white;
-      border-radius: 8px;
-      padding: 30px;
-      max-width: 800px;
-      max-height: 90vh;
-      overflow-y: auto;
-      box-shadow: 0 10px 40px rgba(0,0,0,0.3);
-      z-index: 9999;
-    `;
+    const componentIps = new Set(components[compIdx]);
+    console.log(`Exporting component ${compIdx}: ${componentIps.size} IPs`);
 
-    const sel = exportData.selection;
-    const timeUnit = currentTimeInfo ? currentTimeInfo.unit : 'time units';
-    
-    // Build file detection display
-    const fileInfo = exportData.data_files || {};
-    const fileDetectionHtml = fileInfo.detected
-      ? `<div style="background: #d4edda; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
-           <strong style="color: #155724;">✓ Auto-detected ${fileInfo.files?.length || 0} data file(s):</strong>
-           <ul style="margin: 5px 0 0 20px; padding: 0;">
-             ${(fileInfo.files || []).map(f => `<li>${f}</li>`).join('')}
-           </ul>
-         </div>`
-      : `<div style="background: #fff3cd; padding: 10px; border-radius: 5px; margin-bottom: 10px;">
-           <strong style="color: #856404;">⚠ Could not auto-detect data files</strong>
-           <p style="margin: 5px 0 0 0; font-size: 12px;">Please replace &lt;INPUT_CSV_FILES&gt; with your source CSV file paths.</p>
-         </div>`;
-    
-    modal.innerHTML = `
-      <h2 style="margin-top: 0; color: #333; border-bottom: 2px solid #007bff; padding-bottom: 10px;">
-        Export Brush Selection
-      </h2>
-      
-      <div style="margin: 20px 0;">
-        <h3 style="color: #555; margin-bottom: 10px;">Selection Summary</h3>
-        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 14px;">
-          <div><strong>Arcs:</strong> ${sel.arcs}</div>
-          <div><strong>Unique IPs:</strong> ${sel.ip_count}</div>
-          <div><strong>Time Range:</strong> ${sel.time_range.display || (sel.time_range.min + ' - ' + sel.time_range.max)}</div>
-          <div><strong>Duration:</strong> ${sel.time_range.duration.toFixed(2)} ${timeUnit}s</div>
-          <div><strong>Primary Attack:</strong> ${sel.primary_attack}</div>
-        </div>
-      </div>
+    // Filter links where both source and target belong to this component
+    const componentLinks = linksWithNodes.filter(l =>
+      componentIps.has(l.sourceNode.name) && componentIps.has(l.targetNode.name)
+    );
 
-      <div style="margin: 20px 0;">
-        <h3 style="color: #555; margin-bottom: 10px;">Data Files</h3>
-        ${fileDetectionHtml}
-        ${fileInfo.details ? `
-          <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; font-size: 12px;">
-            <strong>File Details:</strong>
-            <table style="width: 100%; margin-top: 5px; border-collapse: collapse;">
-              <tr style="border-bottom: 1px solid #ddd;">
-                <th style="text-align: left; padding: 4px;">Python Input File</th>
-                ${fileInfo.details.some(d => d.originalFile) ? '<th style="text-align: left; padding: 4px;">Original File</th>' : ''}
-                <th style="text-align: left; padding: 4px;">Set</th>
-                <th style="text-align: left; padding: 4px;">Day</th>
-                <th style="text-align: left; padding: 4px;">Records</th>
-              </tr>
-              ${fileInfo.details.map(d => `
-                <tr>
-                  <td style="padding: 4px; font-family: monospace; font-size: 11px;">${d.file}</td>
-                  ${d.originalFile ? `<td style="padding: 4px; font-family: monospace; font-size: 10px; color: #6c757d;">${d.originalFile}</td>` : ''}
-                  <td style="padding: 4px;">${d.set || '-'}</td>
-                  <td style="padding: 4px;">${d.day || '-'}</td>
-                  <td style="padding: 4px;">${d.records?.toLocaleString() || '-'}</td>
-                </tr>
-              `).join('')}
-            </table>
-          </div>
-        ` : ''}
-      </div>
+    if (componentLinks.length === 0) {
+      alert(`Component ${compIdx} has no connections to export.`);
+      return;
+    }
 
-      <div style="margin: 20px 0;">
-        <h3 style="color: #555; margin-bottom: 10px;">Attack Distribution</h3>
-        <div style="background: #f8f9fa; padding: 15px; border-radius: 5px; font-family: monospace; font-size: 14px;">
-          ${Object.entries(sel.attack_distribution)
-            .sort((a, b) => b[1] - a[1])
-            .map(([attack, count]) => `<div><strong>${attack}:</strong> ${count} arcs</div>`)
-            .join('')}
-        </div>
-      </div>
-
-      <div style="margin: 20px 0;">
-        <h3 style="color: #555; margin-bottom: 10px;">
-          Command Line (tcp_data_loader_parquet.py)
-          <button id="copy-command-btn" style="margin-left: 10px; padding: 5px 15px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;">
-            Copy to Clipboard
-          </button>
-        </h3>
-        <div style="margin-bottom: 10px;">
-          <button id="cmd-single" class="cmd-tab active" style="padding: 6px 12px; background: #007bff; color: white; border: 1px solid #007bff; border-radius: 4px 4px 0 0; cursor: pointer; margin-right: 2px;">
-            Single Line (All Platforms)
-          </button>
-          <button id="cmd-unix" class="cmd-tab" style="padding: 6px 12px; background: #f8f9fa; color: #333; border: 1px solid #ddd; border-radius: 4px 4px 0 0; cursor: pointer; margin-right: 2px;">
-            Unix/Mac
-          </button>
-          <button id="cmd-windows" class="cmd-tab" style="padding: 6px 12px; background: #f8f9fa; color: #333; border: 1px solid #ddd; border-radius: 4px 4px 0 0; cursor: pointer;">
-            PowerShell
-          </button>
-        </div>
-        <textarea id="command-text" readonly style="width: 100%; height: 120px; font-family: monospace; font-size: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 0 5px 5px 5px; background: #f8f9fa;">${command}</textarea>
-        <div style="margin-top: 5px; font-size: 11px; color: #6c757d;">
-          <strong>Tip:</strong> Use "Single Line" for easy copy-paste on any platform. Unix/Mac and PowerShell formats are provided for readability.
-        </div>
-      </div>
-
-      <div style="margin: 20px 0;">
-        <h3 style="color: #555; margin-bottom: 10px;">
-          Filter Parameters (JSON)
-          <button id="copy-json-btn" style="margin-left: 10px; padding: 5px 15px; background: #28a745; color: white; border: none; border-radius: 4px; cursor: pointer;">
-            Copy to Clipboard
-          </button>
-          <button id="download-json-btn" style="margin-left: 10px; padding: 5px 15px; background: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer;">
-            Download JSON
-          </button>
-        </h3>
-        <textarea id="json-text" readonly style="width: 100%; height: 200px; font-family: monospace; font-size: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; background: #f8f9fa;">${JSON.stringify(exportData, null, 2)}</textarea>
-      </div>
-
-      <div style="margin: 20px 0;">
-        <h3 style="color: #555; margin-bottom: 10px;">Selected IP Addresses</h3>
-        <textarea readonly style="width: 100%; height: 100px; font-family: monospace; font-size: 12px; padding: 10px; border: 1px solid #ddd; border-radius: 5px; background: #f8f9fa;">${sel.ips.join(', ')}</textarea>
-      </div>
-
-      <div style="text-align: right; margin-top: 30px; padding-top: 20px; border-top: 1px solid #ddd;">
-        <button id="close-modal-btn" style="padding: 10px 30px; background: #6c757d; color: white; border: none; border-radius: 5px; cursor: pointer; font-size: 16px;">
-          Close
-        </button>
-      </div>
-    `;
-
-    overlay.appendChild(modal);
-    document.body.appendChild(overlay);
-
-    // Add event listeners
-    // Command tab switching
-    const commands = exportData.commands || { single_line: command, unix: command, windows: command };
-    const cmdTabs = {
-      'cmd-single': commands.single_line,
-      'cmd-unix': commands.unix,
-      'cmd-windows': commands.windows
-    };
-
-    const updateTabStyles = (activeId) => {
-      ['cmd-single', 'cmd-unix', 'cmd-windows'].forEach(id => {
-        const tab = document.getElementById(id);
-        if (tab) {
-          if (id === activeId) {
-            tab.style.background = '#007bff';
-            tab.style.color = 'white';
-            tab.style.borderColor = '#007bff';
-          } else {
-            tab.style.background = '#f8f9fa';
-            tab.style.color = '#333';
-            tab.style.borderColor = '#ddd';
-          }
-        }
-      });
-    };
-
-    Object.keys(cmdTabs).forEach(tabId => {
-      const tab = document.getElementById(tabId);
-      if (tab) {
-        tab.addEventListener('click', () => {
-          document.getElementById('command-text').value = cmdTabs[tabId];
-          updateTabStyles(tabId);
-        });
-      }
+    // Build CSV rows from the component's links
+    const csvHeader = 'timestamp,src_ip,dst_ip,count,attack,attack_group,protocol';
+    const csvRows = componentLinks.map(l => {
+      const ts = l.minute;
+      const src = l.sourceIp || l.sourceNode.name;
+      const dst = l.targetIp || l.targetNode.name;
+      const count = l.count || 1;
+      const attack = (l.attack || '').replace(/,/g, ';');
+      const attackGroup = (l.attack_group || '').replace(/,/g, ';');
+      const protocol = (l.protocol || '').replace(/,/g, ';');
+      return `${ts},${src},${dst},${count},${attack},${attackGroup},${protocol}`;
     });
 
-    document.getElementById('copy-command-btn').addEventListener('click', () => {
-      const textarea = document.getElementById('command-text');
-      textarea.select();
-      document.execCommand('copy');
-      const btn = document.getElementById('copy-command-btn');
-      const originalText = btn.textContent;
-      btn.textContent = '✓ Copied!';
-      setTimeout(() => { btn.textContent = originalText; }, 2000);
-    });
+    const csvContent = csvHeader + '\n' + csvRows.join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `component_${compIdx}_network.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
 
-    document.getElementById('copy-json-btn').addEventListener('click', () => {
-      const textarea = document.getElementById('json-text');
-      textarea.select();
-      document.execCommand('copy');
-      const btn = document.getElementById('copy-json-btn');
-      const originalText = btn.textContent;
-      btn.textContent = '✓ Copied!';
-      setTimeout(() => { btn.textContent = originalText; }, 2000);
-    });
-
-    document.getElementById('download-json-btn').addEventListener('click', () => {
-      const dataStr = JSON.stringify(exportData, null, 2);
-      const blob = new Blob([dataStr], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `brush_selection_${Date.now()}.json`;
-      link.click();
-      URL.revokeObjectURL(url);
-    });
-
-    document.getElementById('close-modal-btn').addEventListener('click', () => {
-      document.body.removeChild(overlay);
-    });
-
-    // Close on overlay click
-    overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) {
-        document.body.removeChild(overlay);
-      }
-    });
-
-    // Close on Escape key
-    const escHandler = (e) => {
-      if (e.key === 'Escape') {
-        if (document.getElementById('export-modal-overlay')) {
-          document.body.removeChild(overlay);
-        }
-        document.removeEventListener('keydown', escHandler);
-      }
-    };
-    document.addEventListener('keydown', escHandler);
+    console.log(`Exported component ${compIdx}: ${componentLinks.length} links, ${componentIps.size} IPs`);
   }
 
   // Generate and display IP communications list after data is loaded
@@ -4137,14 +3613,5 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
     // Store for export
     currentPairsByFile = pairsByFile;
-
-    // Log to console
-    console.log('=== IP Communications by Set ===');
-    sortedFiles.forEach(file => {
-      const pairs = Array.from(pairsByFile.get(file)).sort();
-      console.log(`\n${file}:`);
-      pairs.forEach(pair => console.log(`  ${pair}`));
-    });
-    console.log('================================');
   }
 })();

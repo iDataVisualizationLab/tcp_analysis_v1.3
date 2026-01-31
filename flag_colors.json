@@ -7,6 +7,6 @@
   "FIN": "#1f78b4",
   "FIN+ACK": "#4aa3e0",
   "RST": "#7b3294",
-  "ACK+RST": "#c69bd9",
+  "RST+ACK": "#c69bd9",
   "OTHER": "#666666"
 }

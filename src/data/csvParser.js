@@ -47,17 +47,20 @@ export function parseCSVLine(line, delimiter = ',') {
  * Stream-parse CSV file.
  * @param {File} file - File to parse
  * @param {Function} onRow - Called with (rowObject, index)
- * @param {Object} options - { hasHeader, delimiter }
+ * @param {Object} options - { hasHeader, delimiter, onProgress }
  * @returns {Promise<{fileName, totalRows, validRows}>}
  */
 export async function parseCSVStream(file, onRow, options = {}) {
   const hasHeader = options.hasHeader !== false;
   const delimiter = options.delimiter || ',';
+  const onProgress = options.onProgress; // Optional: (bytesProcessed, totalBytes) => void
 
   let header = null;
   let totalRows = 0;
   let validRows = 0;
   let carry = '';
+  let bytesProcessed = 0;
+  const totalBytes = file.size;
 
   const decoder = new TextDecoder();
   const reader = file.stream().getReader();
@@ -101,6 +104,14 @@ export async function parseCSVStream(file, onRow, options = {}) {
   while (true) {
     const { value, done } = await reader.read();
     if (done) break;
+
+    // Track progress
+    if (value) {
+      bytesProcessed += value.length;
+      if (onProgress) {
+        onProgress(bytesProcessed, totalBytes);
+      }
+    }
 
     const txt = decoder.decode(value, { stream: true });
     carry += txt;

@@ -138,16 +138,100 @@ export function createSmartTickFormatter(timeExtent) {
     const endDay = endDate.toISOString().substring(0, 10);
     const crossesDayBoundary = startDay !== endDay;
 
+    // Month names for formatting
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
     return function(d) {
         const timestampInt = Math.floor(d);
         const date = new Date(timestampInt / 1000);
         if (crossesDayBoundary) {
-            // Show month-day and time when crossing day boundaries: MM-DD HH:MM
-            const isoStr = date.toISOString();
-            return isoStr.substring(5, 10) + ' ' + isoStr.substring(11, 16);
+            // Show month name, day and time when crossing day boundaries: Nov 3 14:30
+            const month = monthNames[date.getUTCMonth()];
+            const day = date.getUTCDate();
+            const hours = String(date.getUTCHours()).padStart(2, '0');
+            const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+            return `${month} ${day} ${hours}:${minutes}`;
         } else {
             // Show only time for single-day data: HH:MM:SS
             return date.toISOString().split('T')[1].split('.')[0];
         }
+    };
+}
+
+/**
+ * Create a zoom-adaptive tick formatter that adjusts precision based on visible time range.
+ * Supports formats from days down to microseconds.
+ * @param {Function} getScale - Function that returns the current xScale
+ * @returns {Function} Formatter function for tick values
+ */
+export function createZoomAdaptiveTickFormatter(getScale) {
+    // Month names for formatting
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    return function(d) {
+        // Get current visible extent from scale
+        const scale = getScale();
+        const visibleExtent = scale.domain();
+        const rangeUs = visibleExtent[1] - visibleExtent[0];
+        const rangeSeconds = rangeUs / 1_000_000;
+
+        const timestampUs = Math.floor(d);
+        const date = new Date(timestampUs / 1000);
+
+        // > 1 day: Show "Nov 3 14:30"
+        if (rangeSeconds > 86400) {
+            const month = monthNames[date.getUTCMonth()];
+            const day = date.getUTCDate();
+            const hours = String(date.getUTCHours()).padStart(2, '0');
+            const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+            return `${month} ${day} ${hours}:${minutes}`;
+        }
+
+        // > 1 hour: Show "HH:MM:SS"
+        if (rangeSeconds > 3600) {
+            const isoStr = date.toISOString();
+            return isoStr.substring(11, 19); // HH:MM:SS
+        }
+
+        // > 1 minute: Show "HH:MM:SS"
+        if (rangeSeconds > 60) {
+            const isoStr = date.toISOString();
+            return isoStr.substring(11, 19); // HH:MM:SS
+        }
+
+        // <= 10 seconds: Show "HH:MM:SS.ss" (centiseconds - 10ms precision)
+        const hours = String(date.getUTCHours()).padStart(2, '0');
+        const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+        const seconds = String(date.getUTCSeconds()).padStart(2, '0');
+        const microPart = timestampUs % 1_000_000; // Fractional seconds in microseconds
+        const centiseconds = Math.floor(microPart / 10000); // Convert to centiseconds (2 decimal places)
+        const centiStr = String(centiseconds).padStart(2, '0');
+        return `${hours}:${minutes}:${seconds}.${centiStr}`;
+    };
+}
+
+/**
+ * Create a full-range tick formatter that always shows month and day.
+ * Used for overview charts that show the complete dataset.
+ * @param {Array<number>} timeExtent - [minTime, maxTime] in microseconds
+ * @returns {Function} Formatter function for tick values
+ */
+export function createFullRangeTickFormatter(timeExtent) {
+    // Month names for formatting
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                        'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+    return function(d) {
+        const timestampInt = Math.floor(d);
+        const date = new Date(timestampInt / 1000);
+
+        // Always show month name, day and time: Nov 3 14:30
+        const month = monthNames[date.getUTCMonth()];
+        const day = date.getUTCDate();
+        const hours = String(date.getUTCHours()).padStart(2, '0');
+        const minutes = String(date.getUTCMinutes()).padStart(2, '0');
+        return `${month} ${day} ${hours}:${minutes}`;
     };
 }

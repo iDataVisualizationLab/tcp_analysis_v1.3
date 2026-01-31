@@ -10,71 +10,60 @@
   <link rel="dns-prefetch" href="https://d3js.org" />
 </head>
 <body>
-  <header>
-    <div class="header-controls">
-      <label for="fileInput" style="font-weight:600;">Upload CSV(s)</label>
-      <input id="fileInput" type="file" accept=".csv" multiple />
-      <label for="ipMapInput" style="font-weight:600;">IP Map JSON</label>
-      <input id="ipMapInput" type="file" accept=".json" />
-      <label for="eventMapInput" style="font-weight:600;">Event Type Map JSON</label>
-      <input id="eventMapInput" type="file" accept=".json" />
-      <div id="status">Waiting for data…</div>
+  <div class="sticky-header">
+    <div class="secondary-controls">
+      <div style="display:flex; align-items:center; gap:8px; padding:4px 8px; border:1px solid #dee2e6; border-radius:4px;">
+        <label for="fileInput" style="font-size:12px; font-weight:600; white-space:nowrap;">CSV File(s):</label>
+        <input id="fileInput" type="file" accept=".csv" multiple style="font-size:12px; cursor:pointer;" />
+      </div>
+      <!-- <fieldset style="border:1px solid #dee2e6; padding:4px 8px; border-radius:4px; display:flex; gap:8px; align-items:center;">
+        <legend style="font-size:12px; padding:0 4px; font-weight:600;">Network Mode</legend>
+        <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
+          <input type="radio" name="labelMode" value="timearcs" id="labelModeTimearcs" checked>
+          <span>Timearcs</span>
+        </label>
+        <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
+          <input type="radio" name="labelMode" value="force_layout" id="labelModeForceLayout">
+          <span>Force Layout</span>
+        </label>
+      </fieldset> -->
+      <div style="display:flex; align-items:center; gap:8px; padding:4px 8px; border:1px solid #dee2e6; border-radius:4px;">
+        <label for="compressionSlider" style="font-size:12px; font-weight:600; white-space:nowrap;">Zoom:</label>
+        <input type="range" id="compressionSlider" min="1" max="10" step="0.5" value="3" style="width:100px; cursor:pointer;" />
+        <span id="compressionValue" style="font-size:12px; min-width:24px; text-align:right;">3x</span>
+      </div>
+      <div id="bifocalRegionIndicator" style="display:none; font-size:11px; padding:4px 8px; background:#e7f3ff; border:1px solid #74c0fc; border-radius:4px; font-weight:600; color:#1971c2;">
+        <span id="bifocalRegionText">Focus: 35% - 65%</span>
+      </div>
+      <div style="border-left: 2px solid #dee2e6; height: 30px; margin: 0 4px;"></div>
+      <button id="clearBrush" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Clear all selections">
+        <span>✕ Clear Selections</span>
+      </button>
+      <div id="componentInfo" style="display:none; font-size:11px; padding:4px 8px; background:#e7f5ff; border:1px solid #74c0fc; border-radius:4px; margin-left:8px;">
+        <span style="font-weight:600;">Components:</span>
+        <span id="componentCount">0</span>
+        <span style="opacity:0.7; margin-left:4px;">(<span id="componentIPCount">0</span> IPs)</span>
+      </div>
+      <div style="margin-left:auto; display:flex; align-items:center; gap:8px;">
+        <div id="loadingProgress" style="display:none; width:200px; padding:4px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff;">
+          <div style="font-size:10px; font-weight:600; margin-bottom:4px; color:#495057;">
+            <span id="progressText">Loading...</span>
+          </div>
+          <div style="width:100%; height:6px; background:#e9ecef; border-radius:3px; overflow:hidden;">
+            <div id="progressBar" style="width:0%; height:100%; background:#007bff; transition:width 0.2s;"></div>
+          </div>
+        </div>
+        <div id="status" style="padding:4px 12px; border:1px solid #dee2e6; border-radius:4px; background:#f8f9fa; font-size:11px; font-weight:600; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">Waiting for data…</div>
+        <button id="helpBtn" style="width:32px; height:32px; border-radius:50%; border:1px solid #dee2e6; background:#fff; cursor:help; font-size:14px; font-weight:600; transition: all 0.2s; display:flex; align-items:center; justify-content:center; padding:0;" title="⌨️ Arrow keys: move/resize focus region&#10;🖱️ Click &amp; drag: select arcs&#10;📊 Label Mode: toggle attack types&#10;📈 Compression: adjust magnification">
+          ?
+        </button>
+      </div>
     </div>
-  </header>
-  <div class="secondary-controls">
-    <fieldset style="border:1px solid #dee2e6; padding:4px 8px; border-radius:4px; display:flex; gap:8px; align-items:center;">
-      <legend style="font-size:12px; padding:0 4px; font-weight:600;">Label Mode</legend>
-      <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
-        <input type="radio" name="labelMode" value="attack" id="labelModeAttack" checked>
-        <span>Attack</span>
-      </label>
-      <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
-        <input type="radio" name="labelMode" value="attack_group" id="labelModeAttackGroup">
-        <span>Attack Group</span>
-      </label>
-    </fieldset>
-    <button id="lensingToggle" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Toggle fisheye lens effect (Shift+L)">
-      <span>🔍 Fisheye Lens</span>
-    </button>
-    <button id="resetFisheyeBtn" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Reset to original positions">
-      <span>↺ Reset</span>
-    </button>
-    <div style="display:flex; align-items:center; gap:8px; padding:4px 8px; border:1px solid #dee2e6; border-radius:4px;">
-      <label for="lensingMulSlider" style="font-size:12px; font-weight:600; white-space:nowrap;">Lens Power:</label>
-      <input type="range" id="lensingMulSlider" min="2" max="20" step="0.5" value="5" style="width:100px; cursor:pointer;" />
-      <span id="lensingMulValue" style="font-size:12px; min-width:24px; text-align:right;">5x</span>
-    </div>
-    <div id="fisheyeModeIndicator" style="display:none; font-size:11px; padding:4px 8px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; font-weight:600; color:#495057;">
-      <span id="fisheyeModeText">Both Axes</span>
-    </div>
-    <div style="border-left: 2px solid #dee2e6; height: 30px; margin: 0 4px;"></div>
-    <div id="brushStatus" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#f8f9fa; font-size:12px; font-weight:600; display:flex; align-items:center; gap:4px;" title="Click and drag on empty space to select arcs">
-      <span>📐</span>
-      <span id="brushStatusText">Drag to select</span>
-    </div>
-    <button id="clearBrush" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Clear brush selection">
-      <span>✕ Clear</span>
-    </button>
-    <button id="exportSelection" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s; background:#007bff; color:#fff; border-color:#007bff;" title="Export selected arcs for processing">
-      <span>⬇ Export Selection</span>
-    </button>
-    <div id="componentInfo" style="display:none; font-size:11px; padding:4px 8px; background:#e7f5ff; border:1px solid #74c0fc; border-radius:4px; margin-left:8px;">
-      <span style="font-weight:600;">Components:</span>
-      <span id="componentCount">0</span>
-      <span style="opacity:0.7; margin-left:4px;">(<span id="componentIPCount">0</span> IPs)</span>
-    </div>
-    <div class="hint" style="margin-left: auto;">
-      💡 Press <kbd style="padding:2px 6px; background:#f8f9fa; border:1px solid #dee2e6; border-radius:3px; font-size:11px; font-family:monospace;">Shift + L</kbd> to toggle lensing | 📐 Click &amp; drag to select arcs | 🔍 Top edge: horizontal zoom, Left edge: vertical zoom
-    </div>
+    <svg id="axis-top"></svg>
+    <svg id="bifocal-bar" width="1200" height="28" style="display:block;"></svg>
   </div>
   <main>
-    <div class="top-bar">
-      <div class="legend" id="legend" style="margin-bottom:6px;"></div>
-    </div>
     <div id="chart-container">
-      <div style="position: sticky; top: 0; z-index: 10; background: #fff; border-bottom: 1px solid #eee;">
-        <svg id="axis-top"></svg>
-      </div>
       <svg id="chart" width="1200" height="600" aria-label="TimeArcs chart"></svg>
     </div>
 
@@ -83,9 +72,9 @@
       <div id="ip-comm-header" style="padding: 12px 16px; background: #f8f9fa; border-bottom: 1px solid #e9ecef; cursor: pointer; display: flex; justify-content: space-between; align-items: center;">
         <span style="font-weight: 600; font-size: 14px;">IP Communications</span>
         <div style="display: flex; align-items: center; gap: 8px;">
-          <button id="exportIPList" style="padding: 4px 10px; border: 1px solid #dee2e6; border-radius: 4px; background: #007bff; color: #fff; cursor: pointer; font-size: 11px; font-weight: 600;" title="Export IP list to file">
+          <!-- <button id="exportIPList" style="padding: 4px 10px; border: 1px solid #dee2e6; border-radius: 4px; background: #007bff; color: #fff; cursor: pointer; font-size: 11px; font-weight: 600;" title="Export IP list to file">
             ⬇ Export List
-          </button>
+          </button> -->
           <span id="ip-comm-toggle" style="font-size: 18px; transition: transform 0.2s;">▼</span>
         </div>
       </div>
@@ -94,6 +83,18 @@
       </div>
     </div>
   </main>
+
+  <!-- Floating Legend Panel -->
+  <div id="legendPanel" class="legend-panel">
+    <div class="legend-panel-header" id="legendPanelHeader">
+      <span>Attack Types</span>
+      <span id="legendCollapseIcon" style="font-size: 12px; transition: transform 0.2s;">▼</span>
+    </div>
+    <div class="legend-panel-body" id="legendPanelBody">
+      <div class="legend" id="legend"></div>
+    </div>
+  </div>
+
   <div id="tooltip" class="tooltip"></div>
   <script type="module" src="./attack_timearcs.js"></script>
   </body>

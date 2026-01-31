@@ -23,7 +23,7 @@ export function createTooltipHTML(data) {
         let tooltipContent = `<b>${data.flagType} (Binned)</b><br>`;
         tooltipContent += `Count: ${data.count} packets<br>`;
 
-        // Show IP:port format
+        // Show source IP (row) and destination summary
         const srcPort = data.src_port ?? data.srcPort;
         const dstPort = data.dst_port ?? data.dstPort;
         if (srcPort !== undefined && dstPort !== undefined) {
@@ -40,7 +40,7 @@ export function createTooltipHTML(data) {
         }
 
         tooltipContent += `Time Bin: ${utcTime}<br>`;
-        tooltipContent += `Total Bytes: ${formatBytes(data.totalBytes)}`;
+        tooltipContent += `Total Bytes: ${formatBytes(data.totalBytes || data.total_bytes || 0)}`;
 
         // Show range of sequence numbers if available
         if (data.originalPackets && data.originalPackets.length > 0) {

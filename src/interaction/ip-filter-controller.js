@@ -19,7 +19,6 @@ import { loadFlowData } from '../data/flow-loader.js';
  * @param {Object} dependencies.eventColors - Event color mapping
  * @param {Function} dependencies.visualizeTimeArcs - Render visualization
  * @param {Function} dependencies.drawFlagLegend - Draw flag legend
- * @param {Function} dependencies.updateIPStats - Update IP statistics
  * @param {Function} dependencies.applyTimearcsTimeRangeZoom - Apply time zoom
  * @param {Function} dependencies.computeForceLayoutPositions - Compute force layout
  * @param {Function} dependencies.updateTcpFlowStats - Update TCP flow stats
@@ -40,6 +39,7 @@ export function createIPFilterController(dependencies) {
         eventColors,
         visualizeTimeArcs,
         drawFlagLegend,
+        updateFlagStats,
         updateIPStats,
         applyTimearcsTimeRangeZoom,
         computeForceLayoutPositions,
@@ -86,6 +86,10 @@ export function createIPFilterController(dependencies) {
             });
             state.data.filtered = filtered;
             state.data.version++;
+
+            // Update sidebar statistics with filtered packets
+            try { updateFlagStats(filtered); } catch(e) { console.warn('[updateIPFilter] Flag stats update failed:', e); }
+            try { updateIPStats(filtered); } catch(e) { console.warn('[updateIPFilter] IP stats update failed:', e); }
 
             // Load/filter flows based on data source
             const { flows, skipSyncUpdates, hasFlowListAvailable } = await loadFlowData({
@@ -159,7 +163,7 @@ export function createIPFilterController(dependencies) {
 
                 visualizeTimeArcs(state.data.filtered);
                 try { drawFlagLegend(); } catch(e) { logCatchError('drawFlagLegend', e); }
-                updateIPStats(state.data.filtered);
+                // Stats are updated inside visualizeTimeArcs with time range filtering
 
                 setTimeout(() => {
                     applyTimearcsTimeRangeZoom();
@@ -173,7 +177,7 @@ export function createIPFilterController(dependencies) {
                     visualizeTimeArcs(state.data.filtered);
 
                     try { drawFlagLegend(); } catch(e) { logCatchError('drawFlagLegend', e); }
-                    updateIPStats(state.data.filtered);
+                    // Stats are updated inside visualizeTimeArcs with time range filtering
 
                     setTimeout(() => {
                         applyTimearcsTimeRangeZoom();

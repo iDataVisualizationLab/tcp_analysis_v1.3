@@ -75,18 +75,21 @@ export function renderIpLabels(container, ips, ipToNode, marginLeft, yScale) {
     .attr('text-anchor', 'end')
     .attr('dominant-baseline', 'middle')
     .style('cursor', 'pointer')
+    .style('font-family', "'Courier New', Courier, monospace")
     .text(d => d);
 }
 
 /**
  * Create label hover handler.
  * @param {Object} config
+ * @param {Map} config.ipToComponent - Map from IP to component index (optional)
+ * @param {Function} config.getComponentExpansionState - Getter for component expansion state (optional)
  * @returns {Function}
  */
 export function createLabelHoverHandler(config) {
-  const { 
-    linksWithNodes, arcPaths, svg, widthScale, 
-    showTooltip, tooltip 
+  const {
+    linksWithNodes, arcPaths, svg, widthScale,
+    showTooltip, tooltip, ipToComponent, getComponentExpansionState
   } = config;
   
   return function(event, hoveredIp) {
@@ -124,10 +127,27 @@ export function createLabelHoverHandler(config) {
     const hoveredColor = hoveredLabel.style('fill') || '#343a40';
     svg.selectAll('.ip-label')
       .attr('font-weight', s => connectedIps.has(s) ? 'bold' : null)
-      .style('font-size', s => connectedIps.has(s) ? '14px' : null)
+      .style('font-size', s => connectedIps.has(s) ? '12px' : null)
       .style('fill', s => {
         if (s === hoveredIp) return hoveredColor;
         return connectedIps.has(s) ? '#007bff' : '#343a40';
+      })
+      .style('opacity', s => {
+        // Always show labels for connected IPs
+        if (connectedIps.has(s)) return 1;
+
+        // For non-connected labels, check component expansion state
+        if (getComponentExpansionState && ipToComponent) {
+          const componentExpansionState = getComponentExpansionState();
+          const compIdx = ipToComponent.get(s);
+          if (compIdx !== undefined) {
+            const isExpanded = componentExpansionState.get(compIdx) === true;
+            if (!isExpanded) return 0; // Keep hidden if component is collapsed
+          }
+        }
+
+        // Otherwise preserve current opacity (don't change it)
+        return null; // null means don't change
       });
 
     // Show tooltip with IP information
@@ -162,21 +182,35 @@ export function createLabelMoveHandler(tooltip) {
 /**
  * Create label mouseout handler.
  * @param {Object} config
+ * @param {Map} config.ipToComponent - Map from IP to component index (optional)
+ * @param {Function} config.getComponentExpansionState - Getter for component expansion state (optional)
  * @returns {Function}
  */
 export function createLabelLeaveHandler(config) {
-  const { arcPaths, svg, widthScale, hideTooltip, tooltip } = config;
-  
+  const { arcPaths, svg, widthScale, hideTooltip, tooltip, ipToComponent, getComponentExpansionState } = config;
+
   return function() {
     hideTooltip(tooltip);
     // Restore default state
     arcPaths.style('stroke-opacity', 0.6)
             .attr('stroke-width', d => widthScale(Math.max(1, d.count)));
     svg.selectAll('.row-line').attr('stroke-opacity', 1).attr('stroke-width', 0.4);
-    svg.selectAll('.ip-label')
+
+    const labels = svg.selectAll('.ip-label');
+    labels
       .attr('font-weight', null)
       .style('font-size', null)
       .style('fill', '#343a40');
+
+    // Restore opacity based on component expansion state (if available)
+    if (getComponentExpansionState && ipToComponent) {
+      const componentExpansionState = getComponentExpansionState();
+      labels.style('opacity', d => {
+        const compIdx = ipToComponent.get(d);
+        if (compIdx === undefined) return 1;
+        return componentExpansionState.get(compIdx) === true ? 1 : 0;
+      });
+    }
   };
 }
 
@@ -192,6 +226,161 @@ export function attachLabelHoverHandlers(labels, hoverHandler, moveHandler, leav
     .on('mouseover', hoverHandler)
     .on('mousemove', moveHandler)
     .on('mouseout', leaveHandler);
+}
+
+/**
+ * Render component expansion toggles.
+ * @param {d3.Selection} container - Parent SVG group
+ * @param {Array} components - Array of component IP arrays
+ * @param {Map} ipToComponent - Map from IP to component index
+ * @param {Function} yScale - Y scale function
+ * @param {number} marginLeft - Left margin offset
+ * @param {Map} componentExpansionState - Map of component index to expansion state
+ * @param {Function} onToggle - Callback function when toggle is clicked (receives compIdx)
+ * @returns {d3.Selection} Selection of toggle groups
+ */
+export function renderComponentToggles(container, components, ipToComponent, yScale, marginLeft, componentExpansionState, onToggle, onExport) {
+  if (!components || components.length <= 1) {
+    // No toggles needed for single component
+    return container.selectAll('.component-toggle').data([]).join('g');
+  }
+
+  // Create toggle data: one toggle per component
+  const toggleData = components.map((comp, idx) => {
+    // Find the first (topmost) IP in this component
+    const firstIp = comp[0];
+    return {
+      compIdx: idx,
+      ipCount: comp.length,
+      ip: firstIp,
+      isExpanded: componentExpansionState.get(idx) === true
+    };
+  });
+
+  const toggleGroups = container.selectAll('.component-toggle')
+    .data(toggleData, d => d.compIdx)
+    .join('g')
+    .attr('class', 'component-toggle')
+    .attr('transform', d => `translate(8, ${yScale(d.ip)})`)
+    .style('cursor', 'pointer')
+    .style('opacity', 0); // Start hidden
+
+  // Circle background
+  toggleGroups.selectAll('circle')
+    .data(d => [d])
+    .join('circle')
+    .attr('r', 7)
+    .attr('fill', d => d.isExpanded ? '#28a745' : '#6c757d')
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 2)
+    .style('transition', 'fill 0.2s ease');
+
+  // Icon: chevron (right for collapsed, down for expanded)
+  toggleGroups.selectAll('path.toggle-icon')
+    .data(d => [d])
+    .join('path')
+    .attr('class', 'toggle-icon')
+    .attr('d', d => {
+      if (d.isExpanded) {
+        // Chevron down
+        return 'M -3 -2 L 0 2 L 3 -2';
+      } else {
+        // Chevron right
+        return 'M -2 -3 L 2 0 L -2 3';
+      }
+    })
+    .attr('fill', 'none')
+    .attr('stroke', '#fff')
+    .attr('stroke-width', 2)
+    .attr('stroke-linecap', 'round')
+    .attr('stroke-linejoin', 'round');
+
+  // Export CSV button (foreignObject for HTML button)
+  // if (onExport) {
+  //   toggleGroups.selectAll('text.comp-export-btn')
+  //     .data(d => [d])
+  //     .join('text')
+  //     .attr('class', 'comp-export-btn')
+  //     .attr('x', 13)
+  //     .attr('y', 0)
+  //     .attr('dominant-baseline', 'middle')
+  //     .attr('text-anchor', 'start')
+  //     .style('font-size', '13px')
+  //     .style('cursor', 'pointer')
+  //     .style('fill', '#6c757d')
+  //     .text('\u2913')
+  //     .on('click', function(event) {
+  //       event.stopPropagation();
+  //       onExport(d3.select(this).datum().compIdx);
+  //     })
+  //     .on('mouseenter', function() {
+  //       d3.select(this).style('fill', '#007bff');
+  //     })
+  //     .on('mouseleave', function() {
+  //       d3.select(this).style('fill', '#6c757d');
+  //     })
+  //     .append('title')
+  //     .text(d => `Export component ${d.compIdx} network data as CSV`);
+  // }
+
+  // Click handler (for toggle circle area, not export button)
+  toggleGroups.on('click', function(event, d) {
+    // Don't toggle if click was on the export button
+    if (event.target.closest('.comp-export-btn')) return;
+    event.stopPropagation();
+    if (onToggle) {
+      onToggle(d.compIdx);
+    }
+  });
+
+  // Hover effects
+  toggleGroups.on('mouseenter', function(event, d) {
+    d3.select(this).select('circle')
+      .attr('fill', d.isExpanded ? '#218838' : '#5a6268');
+  });
+
+  toggleGroups.on('mouseleave', function(event, d) {
+    d3.select(this).select('circle')
+      .attr('fill', d.isExpanded ? '#28a745' : '#6c757d');
+  });
+
+  return toggleGroups;
+}
+
+/**
+ * Update component toggle states (visual update only, no data rebind).
+ * @param {d3.Selection} toggleGroups - Selection of toggle groups
+ * @param {Map} componentExpansionState - Map of component index to expansion state
+ */
+export function updateComponentToggles(toggleGroups, componentExpansionState) {
+  toggleGroups.each(function(d) {
+    const isExpanded = componentExpansionState.get(d.compIdx) === true;
+    d.isExpanded = isExpanded;
+
+    const group = d3.select(this);
+
+    // Update circle color
+    group.select('circle')
+      .attr('fill', isExpanded ? '#28a745' : '#6c757d');
+
+    // Update icon
+    group.select('path.toggle-icon')
+      .attr('d', isExpanded ? 'M -3 -2 L 0 2 L 3 -2' : 'M -2 -3 L 2 0 L -2 3');
+  });
+}
+
+/**
+ * Show component toggles with fade-in animation.
+ * @param {d3.Selection} toggleGroups - Selection of toggle groups
+ * @param {number} duration - Animation duration in milliseconds (default: 400)
+ */
+export function showComponentToggles(toggleGroups, duration = 400) {
+  if (toggleGroups && !toggleGroups.empty()) {
+    toggleGroups
+      .transition()
+      .duration(duration)
+      .style('opacity', 1);
+  }
 }
 
 /**

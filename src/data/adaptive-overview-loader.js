@@ -325,18 +325,13 @@ export class AdaptiveOverviewLoader {
         }
 
         // Generate all pair combinations (sorted alphabetically for canonical form)
+        // Only include pairs where both IPs are selected, matching flow list loader behavior
         const sortedIPs = [...selectedIPs].sort();
 
         for (let i = 0; i < sortedIPs.length; i++) {
             for (let j = i + 1; j < sortedIPs.length; j++) {
                 pairs.add(`${sortedIPs[i]}<->${sortedIPs[j]}`);
             }
-        }
-
-        // Also add single-IP pairs (for filtering data that includes any selected IP)
-        // This handles the case where we want all flows involving selected IPs
-        for (const ip of selectedIPs) {
-            pairs.add(ip);
         }
 
         return pairs;
@@ -443,13 +438,9 @@ export class AdaptiveOverviewLoader {
         const aggregateAll = selectedPairs.size === 0;
 
         for (const [pairKey, pairCounts] of Object.entries(flowsByPair)) {
-            // Check if this pair matches selection
+            // Check if this pair matches selection (both IPs must be selected)
             if (!aggregateAll) {
-                const [ip1, ip2] = pairKey.split('<->');
-                const pairMatches = selectedPairs.has(pairKey) ||
-                                   selectedPairs.has(ip1) ||
-                                   selectedPairs.has(ip2);
-                if (!pairMatches) continue;
+                if (!selectedPairs.has(pairKey)) continue;
             }
 
             // Aggregate counts from this pair

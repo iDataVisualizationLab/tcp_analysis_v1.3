@@ -58,10 +58,18 @@ export function renderBars(layer, binned, options) {
 
     const data = Array.from(stacks.values());
     const barWidth = computeBarWidthPx(items, xScale);
-    const MAX_BAR_H = Math.max(6, Math.min(ROW_GAP - 28, 16));
+
+    // Find maximum stack total to ensure tallest stack fits within MAX_BAR_H
+    let maxStackTotal = 1;
+    for (const s of data) {
+        if (s.total > maxStackTotal) maxStackTotal = s.total;
+    }
+
+    // Ensure max height leaves small gap between rows (ROW_GAP - 4 pixels)
+    const MAX_BAR_H = Math.max(6, Math.min(ROW_GAP - 4, 24));
     const hScale = d3.scaleLinear()
-        .domain([0, Math.max(1, globalMaxBinCount)])
-        .range([1, MAX_BAR_H]);
+        .domain([0, maxStackTotal])
+        .range([0, MAX_BAR_H]);
 
     const toSegments = (s) => {
         const parts = Array.from(s.byFlag.entries()).map(([flag, info]) => ({

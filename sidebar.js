@@ -59,6 +59,11 @@ export function createIPCheckboxes(uniqueIPs, onChange) {
     const container = document.getElementById('ipCheckboxes');
     if (!container) return;
     container.innerHTML = '';
+
+    // Persist collapsed state across re-renders
+    if (container._collapsed === undefined) container._collapsed = false;
+
+    // Build checkboxes (identical to original)
     uniqueIPs.forEach(ip => {
         const div = document.createElement('div');
         div.style.marginBottom = '5px';
@@ -82,6 +87,53 @@ export function createIPCheckboxes(uniqueIPs, onChange) {
         div.appendChild(label);
         container.appendChild(div);
     });
+
+    // --- Collapse/expand toggle (placed after #ipSelector, outside scroll) ---
+    const selector = document.getElementById('ipSelector');
+    let toggleDiv = document.getElementById('ipCollapseToggle');
+    if (!toggleDiv && selector) {
+        toggleDiv = document.createElement('div');
+        toggleDiv.id = 'ipCollapseToggle';
+        toggleDiv.style.cssText = 'margin-top:6px;';
+        selector.parentNode.insertBefore(toggleDiv, selector.nextSibling);
+    }
+    if (toggleDiv) {
+        toggleDiv.innerHTML = '';
+        const toggleLink = document.createElement('a');
+        toggleLink.href = '#';
+        toggleLink.style.cssText = 'font-size:11px; color:#007bff; text-decoration:none; cursor:pointer;';
+        toggleLink.addEventListener('click', (e) => {
+            e.preventDefault();
+            container._collapsed = !container._collapsed;
+            applyCollapseState(container, toggleLink);
+        });
+        toggleDiv.appendChild(toggleLink);
+        applyCollapseState(container, toggleLink);
+    }
+}
+
+// Separate function so it can't interfere with checkbox event flow
+function applyCollapseState(container, toggleLink) {
+    const items = container.querySelectorAll('.ip-item');
+    if (container._collapsed) {
+        let checkedCount = 0;
+        items.forEach(item => {
+            const cb = item.querySelector('input[type="checkbox"]');
+            if (cb && cb.checked) {
+                item.style.display = '';
+                checkedCount++;
+            } else {
+                item.style.display = 'none';
+            }
+        });
+        const unchecked = items.length - checkedCount;
+        toggleLink.textContent = checkedCount === 0
+            ? `Show all ${items.length} IPs`
+            : `Show ${unchecked} more IP${unchecked !== 1 ? 's' : ''}`;
+    } else {
+        items.forEach(item => { item.style.display = ''; });
+        toggleLink.textContent = 'Show only selected';
+    }
 }
 
 export function filterIPList(searchTerm) {
@@ -410,7 +462,6 @@ export function wireSidebarControls(opts) {
     on('showDataTransfer', 'change', (e) => { if (opts.onToggleDataTransfer) opts.onToggleDataTransfer(e.target.checked); });
     on('showClosing', 'change', (e) => { if (opts.onToggleClosing) opts.onToggleClosing(e.target.checked); });
     on('showGroundTruth', 'change', (e) => { if (opts.onToggleGroundTruth) opts.onToggleGroundTruth(e.target.checked); });
-    on('toggleBinning', 'change', (e) => { if (opts.onToggleBinning) opts.onToggleBinning(e.target.checked); });
 
     // Render mode radios
     const modeCircles = document.getElementById('renderModeCircles');
@@ -434,10 +485,34 @@ export function updateFlagStats(packets, classifyFlags, flagColors) {
     }
     const flagCounts = {};
     packets.forEach(packet => {
-        const ft = classifyFlags(packet.flags);
-        flagCounts[ft] = (flagCounts[ft] || 0) + 1;
+        // Use pre-classified flag_type/flagType for binned data, fall back to classifyFlags for raw packets
+        const ft = packet.flagType || packet.flag_type || classifyFlags(packet.flags);
+        const count = packet.count || 1;
+        flagCounts[ft] = (flagCounts[ft] || 0) + count;
     });
     const sortedFlags = Object.entries(flagCounts).sort(([,a],[,b]) => b - a);
+    let html = '';
+    sortedFlags.forEach(([flag, count]) => {
+        const color = flagColors[flag] || '#95a5a6';
+        const hasDefinedColor = Object.prototype.hasOwnProperty.call(flagColors, flag);
+        html += `
+            <div style="display:flex; align-items:center; margin-bottom:3px; cursor:pointer;" data-flag="${flag}">
+                <div style="width:12px; height:12px; background-color:${color}; margin-right:8px; border-radius:2px; ${hasDefinedColor ? '' : 'border:1px solid #666;'}"></div>
+                <span>${flag}: ${count.toLocaleString()}</span>
+                ${hasDefinedColor ? '' : '<span style="color:#666; font-size:10px; margin-left:5px;">(no color)</span>'}
+            </div>`;
+    });
+    container.innerHTML = html || '<div style="color:#666;">No TCP packets found</div>';
+}
+
+export function updateFlagStatsFromPrecomputed(flagStats, flagColors) {
+    const container = document.getElementById('flagStats');
+    if (!container) return;
+    if (!flagStats || Object.keys(flagStats).length === 0) {
+        container.innerHTML = '<div style="color: #666;">No data to display</div>';
+        return;
+    }
+    const sortedFlags = Object.entries(flagStats).sort(([,a],[,b]) => b - a);
     let html = '';
     sortedFlags.forEach(([flag, count]) => {
         const color = flagColors[flag] || '#95a5a6';
@@ -470,11 +545,11 @@ export function updateIPStats(packets, flagColors, formatBytes) {
         Object.keys(flagColors).forEach(flag => { ipStats[ip].flags_sent[flag]=0; ipStats[ip].flags_received[flag]=0; });
     });
     packets.forEach(p => {
-        const flagType = p.flag_type || p.flags;
-        const fStr = typeof flagType === 'string' ? flagType : (p.flag_type || '');
-        const size = p.length || 0;
-        if (ipStats[p.src_ip]) { const s=ipStats[p.src_ip]; s.sent++; s.total++; s.bytes_sent+=size; s.total_bytes+=size; s.connections.add(p.dst_ip); if (s.flags_sent[fStr]!==undefined) s.flags_sent[fStr]++; }
-        if (ipStats[p.dst_ip]) { const s=ipStats[p.dst_ip]; s.received++; s.total++; s.bytes_received+=size; s.total_bytes+=size; s.connections.add(p.src_ip); if (s.flags_received[fStr]!==undefined) s.flags_received[fStr]++; }
+        const fStr = p.flagType || p.flag_type || (typeof p.flags === 'string' ? p.flags : '') || '';
+        const count = p.count || 1;
+        const size = (p.total_length || p.length || 0);
+        if (ipStats[p.src_ip]) { const s=ipStats[p.src_ip]; s.sent+=count; s.total+=count; s.bytes_sent+=size; s.total_bytes+=size; s.connections.add(p.dst_ip); if (s.flags_sent[fStr]!==undefined) s.flags_sent[fStr]+=count; }
+        if (ipStats[p.dst_ip]) { const s=ipStats[p.dst_ip]; s.received+=count; s.total+=count; s.bytes_received+=size; s.total_bytes+=size; s.connections.add(p.src_ip); if (s.flags_received[fStr]!==undefined) s.flags_received[fStr]+=count; }
     });
     const flagsToHtml = (m) => {
         const arr = Object.entries(m).filter(([,c])=>c>0).sort(([,a],[,b])=>b-a);
@@ -492,7 +567,7 @@ export function updateIPStats(packets, flagColors, formatBytes) {
               <div>Sent: ${s.sent.toLocaleString()}</div>
               <div>Received: ${s.received.toLocaleString()}</div>
               <div>Total: ${s.total.toLocaleString()}</div>
-              <div>Connections: ${connectionCount}</div>
+              <div>Unique Peers: ${connectionCount}</div>
               <div>Bytes Sent: ${formatBytes(s.bytes_sent)}</div>
               <div>Bytes Recv: ${formatBytes(s.bytes_received)}</div>
             </div>

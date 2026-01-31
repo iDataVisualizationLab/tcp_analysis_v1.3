@@ -234,7 +234,7 @@ export function drawFlagLegend({ svg, width, height, flagColors, globalMaxBinCou
 
         // Build items from flagColors keys; order to follow flag_colors.json
         const allKeys = Object.keys(flagColors || {});
-        const preferredOrder = ['SYN', 'SYN+ACK', 'ACK', 'PSH', 'PSH+ACK', 'FIN', 'FIN+ACK', 'RST', 'ACK+RST'];
+        const preferredOrder = ['SYN', 'SYN+ACK', 'ACK', 'PSH', 'PSH+ACK', 'FIN', 'FIN+ACK', 'RST', 'RST+ACK'];
         let items;
         if (allKeys.length) {
             const std = preferredOrder.filter(k => allKeys.includes(k));
@@ -242,7 +242,7 @@ export function drawFlagLegend({ svg, width, height, flagColors, globalMaxBinCou
             items = [...std, ...extras];
             if (allKeys.includes('OTHER')) items.push('OTHER');
         } else {
-            items = ['SYN','SYN+ACK','ACK','PSH+ACK','FIN','FIN+ACK','ACK+RST','RST','OTHER'];
+            items = ['SYN','SYN+ACK','ACK','PSH+ACK','FIN','FIN+ACK','RST+ACK','RST','OTHER'];
         }
 
         const sw = 10;       // swatch size

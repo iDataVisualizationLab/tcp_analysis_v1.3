@@ -1,10 +1,22 @@
 // src/config/constants.js
 // Extracted from attack_timearcs.js
 
-export const MARGIN = { top: 40, right: 20, bottom: 30, left: 110 };
+export const MARGIN = { top: 40, right: 20, bottom: 30, left: 160 };
 export const DEFAULT_WIDTH = 1200;
 export const DEFAULT_HEIGHT = 600;
 export const INNER_HEIGHT = 780;
+
+// Minimum vertical spacing between IPs in TimeArcs (px).
+// When many IPs are loaded, the SVG height expands to guarantee this spacing.
+export const MIN_IP_SPACING = 4;
+
+// Tighter spacing for IPs within the same connected component (multi-component case).
+// Makes each component visually distinct and more compact.
+export const MIN_IP_SPACING_WITHIN_COMPONENT = 10;
+
+// Gap between different connected components (px).
+// Provides visual separation between disconnected IP clusters.
+export const INTER_COMPONENT_GAP = 10;
 
 export const PROTOCOL_COLORS = new Map([
   ['TCP', '#1f77b4'],
@@ -67,7 +79,7 @@ export const DEFAULT_FLAG_COLORS = {
     'FIN+ACK': '#9b59b6',
     'RST': '#34495e',
     'PSH+ACK': '#3498db',
-    'ACK+RST': '#c0392b',
+    'RST+ACK': '#c0392b',
     'OTHER': '#bdc3c7'
 };
 
@@ -79,7 +91,7 @@ export const FLAG_CURVATURE = {
     'PSH+ACK': 14,
     'FIN': 18,
     'FIN+ACK': 20,
-    'ACK+RST': 28,
+    'RST+ACK': 28,
     'RST': 30,
     'OTHER': 0
 };

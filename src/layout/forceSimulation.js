@@ -41,22 +41,23 @@ export function createForceSimulation(d3, nodes, links, options = {}) {
 }
 
 /**
- * Run simulation until energy converges.
+ * Run simulation until energy converges (async, yields to browser every yieldInterval iterations).
  * @param {d3.Simulation} sim
  * @param {number} maxIterations
  * @param {number} threshold
- * @returns {number} - Iterations run
+ * @param {number} yieldInterval - Yield to browser every N iterations
+ * @returns {Promise<number>} - Iterations run
  */
-export function runUntilConverged(sim, maxIterations = 300, threshold = 0.001) {
+export async function runUntilConverged(sim, maxIterations = 300, threshold = 0.001, yieldInterval = 50) {
   let prevEnergy = Infinity;
   let stableCount = 0;
-  
+
   for (let i = 0; i < maxIterations; i++) {
     sim.tick();
-    
+
     const energy = sim.nodes().reduce((sum, n) =>
       sum + (n.vx * n.vx + n.vy * n.vy), 0);
-    
+
     if (Math.abs(prevEnergy - energy) < threshold) {
       stableCount++;
       if (stableCount >= 5) {
@@ -67,8 +68,13 @@ export function runUntilConverged(sim, maxIterations = 300, threshold = 0.001) {
       stableCount = 0;
     }
     prevEnergy = energy;
+
+    // Yield to browser to keep UI responsive
+    if ((i + 1) % yieldInterval === 0) {
+      await new Promise(r => setTimeout(r, 0));
+    }
   }
-  
+
   console.log(`Max iterations (${maxIterations}) reached`);
   return maxIterations;
 }
