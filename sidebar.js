@@ -385,7 +385,6 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
                         <span>${formatBytes(flow.totalBytes)}</span>
                         <span>${duration}s duration</span>
                         <span>${closeTypeText}</span>
-                        <button class=\"flow-zoom-btn\" data-flow-id=\"${flow.id}\" title=\"Zoom timeline to this flow\">🔍 Zoom</button>
                         ${viewBtnHTML}
                         ${exportBtnHTML}
                     </div>
@@ -401,11 +400,6 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
             });
             item.addEventListener('click', (e) => {
                 if (e.target && e.target.type !== 'checkbox') cb.click();
-            });
-            const zoomBtn = item.querySelector('.flow-zoom-btn');
-            zoomBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (typeof zoomToFlow === 'function') zoomToFlow(flow);
             });
             const exportBtn = item.querySelector('.flow-export-btn');
             exportBtn.addEventListener('click', (e) => {
@@ -628,7 +622,6 @@ export function createFlowList(flows, selectedFlowIds, formatBytes, formatTimest
                 <span>${formatBytes(flow.totalBytes)}</span>
                 <span>${duration}s duration</span>
                 <span>${closeTypeText}</span>
-                <button class="flow-zoom-btn" data-flow-id="${flow.id}" title="Zoom timeline to this flow">🔍 Zoom</button>
                 <button class="flow-export-btn" data-flow-id="${flow.id}" style="margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ced4da; border-radius:3px; background:#fff; cursor:pointer;">Export CSV</button>
               </div>
               <div style="font-size:10px; color:#999; margin-top:3px;">Start: ${startTime} • End: ${endTime}</div>
@@ -641,12 +634,6 @@ export function createFlowList(flows, selectedFlowIds, formatBytes, formatTimest
         const flowId = e.currentTarget.dataset.flowId;
         const f = flows.find(x => String(x.id) === String(flowId));
         if (f) exportFlowToCSV(f);
-    }));
-    container.querySelectorAll('.flow-zoom-btn').forEach(btn => btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const flowId = e.currentTarget.dataset.flowId;
-        const f = flows.find(x => String(x.id) === String(flowId));
-        if (f) zoomToFlow(f);
     }));
     container.querySelectorAll('.flow-checkbox').forEach(cb => cb.addEventListener('change', (e) => {
         const flowId = e.target.id.replace('flow-','');

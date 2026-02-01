@@ -624,7 +624,7 @@ function initializeBarVisualization() {
                 
                 // Update legends to reflect new scaling
                 setTimeout(() => {
-                    try { 
+                    try {
                         try {
                             const axisBaseY = Math.max(20, bottomOverlayHeight - 20);
                             drawSizeLegend(bottomOverlayRoot, width, bottomOverlayHeight, axisBaseY);
@@ -634,6 +634,9 @@ function initializeBarVisualization() {
                         drawGroundTruthBoxes(selIPs);
                     } catch(e) { logCatchError('binningToggle.refresh', e); }
                 }, 50);
+                // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
+                const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
+                refreshAdaptiveOverview(selIPs).catch(e => console.warn('[Binning] Overview refresh failed:', e));
             } catch (e) {
                 console.warn('Error updating visualization after binning toggle:', e);
                 // Fallback to original behavior
@@ -649,6 +652,9 @@ function initializeBarVisualization() {
                 updateTcpFlowPacketsGlobal();
                 drawSelectedFlowArcs();
                 applyInvalidReasonFilter();
+                // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
+                const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
+                refreshAdaptiveOverview(selIPs).catch(e => console.warn('[RenderMode] Overview refresh failed:', e));
             } catch (e) { console.warn('Render mode toggle failed', e); }
         }
     });

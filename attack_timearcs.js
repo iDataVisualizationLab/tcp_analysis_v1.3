@@ -1714,7 +1714,7 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
         if (minTime === maxTime) {
           selectionTimeRange = { min: minTime, max: minTime + 1 };
         } else {
-          selectionTimeRange = { min: minTime, max: maxTime };
+          selectionTimeRange = { min: minTime, max: maxTime + 1 };
         }
 
         console.log('Brush selection:', {
