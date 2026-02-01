@@ -1,6 +1,6 @@
 // Extracted from ip_arc_diagram_3.html inline script
 // This file contains all logic for the IP Connection Analysis visualization
-import { initSidebar, createIPCheckboxes as sbCreateIPCheckboxes, filterIPList as sbFilterIPList, filterFlowList as sbFilterFlowList, updateFlagStats as sbUpdateFlagStats, updateIPStats as sbUpdateIPStats, createFlowListCapped as sbCreateFlowListCapped, updateTcpFlowStats as sbUpdateTcpFlowStats, updateGroundTruthStatsUI as sbUpdateGroundTruthStatsUI, wireSidebarControls as sbWireSidebarControls, showFlowProgress as sbShowFlowProgress, updateFlowProgress as sbUpdateFlowProgress, hideFlowProgress as sbHideFlowProgress, wireFlowListModalControls as sbWireFlowListModalControls, showCsvProgress as sbShowCsvProgress, updateCsvProgress as sbUpdateCsvProgress, hideCsvProgress as sbHideCsvProgress } from './sidebar.js';
+import { initSidebar, createIPCheckboxes as sbCreateIPCheckboxes, filterIPList as sbFilterIPList, filterFlowList as sbFilterFlowList, updateFlagStats as sbUpdateFlagStats, updateIPStats as sbUpdateIPStats, createFlowListCapped as sbCreateFlowListCapped, updateTcpFlowStats as sbUpdateTcpFlowStats, updateGroundTruthStatsUI as sbUpdateGroundTruthStatsUI, wireSidebarControls as sbWireSidebarControls, showFlowProgress as sbShowFlowProgress, updateFlowProgress as sbUpdateFlowProgress, hideFlowProgress as sbHideFlowProgress, wireFlowListModalControls as sbWireFlowListModalControls, showCsvProgress as sbShowCsvProgress, updateCsvProgress as sbUpdateCsvProgress, hideCsvProgress as sbHideCsvProgress, refreshIPCollapseState as sbRefreshIPCollapseState } from './sidebar.js';
 import { renderInvalidLegend as sbRenderInvalidLegend, renderClosingLegend as sbRenderClosingLegend, drawFlagLegend as drawFlagLegendFromModule } from './legends.js';
 import { initOverview, createOverviewChart, createOverviewFromAdaptive, createFlowOverviewChart, updateBrushFromZoom, updateOverviewInvalidVisibility, setBrushUpdating, refreshFlowOverview } from './overview_chart.js';
 import { FLOW_RECONSTRUCT_BATCH } from './config.js';
@@ -3624,6 +3624,9 @@ function applyBrushSelectionPrefilter() {
     });
 
     console.log(`Pre-filter matched ${matchedCount} of ${prefilterIPs.length} IPs`);
+
+    // Refresh the IP collapse state to show only selected IPs (since we're coming from TimeArcs)
+    sbRefreshIPCollapseState();
 
     // Clear the pre-filter to prevent re-application
     window.brushSelectionPrefilterIPs = null;

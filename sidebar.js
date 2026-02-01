@@ -61,7 +61,11 @@ export function createIPCheckboxes(uniqueIPs, onChange) {
     container.innerHTML = '';
 
     // Persist collapsed state across re-renders
-    if (container._collapsed === undefined) container._collapsed = false;
+    // Default to collapsed (show only selected) if coming from TimeArcs with pre-selected IPs
+    if (container._collapsed === undefined) {
+        const hasPrefilterIPs = window.brushSelectionPrefilterIPs && window.brushSelectionPrefilterIPs.length > 0;
+        container._collapsed = hasPrefilterIPs;
+    }
 
     // Build checkboxes (identical to original)
     uniqueIPs.forEach(ip => {
@@ -142,6 +146,18 @@ export function filterIPList(searchTerm) {
         const matches = ip.toLowerCase().includes((searchTerm || '').toLowerCase());
         item.style.display = matches ? 'block' : 'none';
     });
+}
+
+// Re-apply the current collapse state (useful after checkboxes are programmatically checked)
+export function refreshIPCollapseState() {
+    const container = document.getElementById('ipCheckboxes');
+    const toggleDiv = document.getElementById('ipCollapseToggle');
+    if (!container || !toggleDiv) return;
+
+    const toggleLink = toggleDiv.querySelector('a');
+    if (toggleLink && container._collapsed !== undefined) {
+        applyCollapseState(container, toggleLink);
+    }
 }
 
 export function filterFlowList(searchTerm) {
