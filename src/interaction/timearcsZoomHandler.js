@@ -209,7 +209,7 @@ export function createTimeArcsZoomHandler(context) {
             const visibleRangeUsImmediate = domain[1] - domain[0];
             if (visibleRangeUsImmediate > 0) {
                 const resolutionImmediate = getResolutionForVisibleRange(visibleRangeUsImmediate);
-                updateZoomIndicator(visibleRangeUsImmediate, resolutionImmediate, 0);
+                updateZoomIndicator(visibleRangeUsImmediate, resolutionImmediate);
             }
         } catch (e) { logCatchError('updateZoomIndicator', e); }
 
@@ -266,7 +266,7 @@ export function createTimeArcsZoomHandler(context) {
                 try { updateZoomDurationLabel(); } catch (e) { logCatchError('updateZoomDurationLabel', e); }
                 const visibleRangeUsFull = xScale.domain()[1] - xScale.domain()[0];
                 const resolutionFull = getResolutionForVisibleRange(visibleRangeUsFull);
-                updateZoomIndicator(visibleRangeUsFull, resolutionFull, currentCache.data.length);
+                updateZoomIndicator(visibleRangeUsFull, resolutionFull);
                 return;
             }
 
@@ -318,8 +318,6 @@ export function createTimeArcsZoomHandler(context) {
                         }
 
                         binnedPackets = processedData;
-                        const visibleRangeUs = xScale.domain()[1] - xScale.domain()[0];
-                        updateZoomIndicator(visibleRangeUs, multiResResult.resolution, binnedPackets.length);
                     }
                 } catch (err) {
                     console.warn('Multi-res data loading failed, falling back:', err);
@@ -354,7 +352,7 @@ export function createTimeArcsZoomHandler(context) {
                     if (!visiblePackets || visiblePackets.length === 0) {
                         if (dynamicLayer) dynamicLayer.selectAll('.direction-dot').remove();
                         const resolutionEmpty = getResolutionForVisibleRange(visibleRangeUs);
-                        updateZoomIndicator(visibleRangeUs, resolutionEmpty, 0);
+                        updateZoomIndicator(visibleRangeUs, resolutionEmpty);
                         return;
                     }
 
@@ -384,8 +382,6 @@ export function createTimeArcsZoomHandler(context) {
                     }
                 }
 
-                const fallbackResolution = getResolutionForVisibleRange(visibleRangeUs);
-                updateZoomIndicator(visibleRangeUs, fallbackResolution, binnedPackets.length);
             }
 
             // Sort if not already sorted in cache

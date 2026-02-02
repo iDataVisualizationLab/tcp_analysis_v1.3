@@ -36,7 +36,12 @@
             <div id="overview-chart"></div>
         </div>
       </div>
-      <aside id="sidebar">
+    </div><!-- end #main-layout -->
+    <aside id="control-panel">
+        <div id="control-panel-drag-handle">
+            <span class="control-panel-title">Controls</span>
+            <span id="control-panel-collapse-icon">&#x25BC;</span>
+        </div>
         <div class="controls">
         <div class="control-group">
             <label>IP Addresses</label>
@@ -50,73 +55,84 @@
             </div>
         </div>
         <div class="control-group">
-            <label>TCP Flag Statistics</label>
+            <label>TCP Flags</label>
             <div id="flagStats" style="min-width: 200px; border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
                 <div style="color: #666;">No data loaded</div>
             </div>
-        </div>
-        <div class="control-group">
-            <label>IP Statistics</label>
-            <div id="ipStats" style="min-width: 250px; max-height: 200px; overflow-y: auto; border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
-                <div style="color: #666;">Select IPs to view statistics</div>
+            <label style="margin-top:4px;">Packet Count</label>
+            <div id="sizeLegend" style="border: 1px solid #dee2e6; padding: 8px; background: white; border-radius: 4px; font-size: 12px;">
+                <div style="color: #666;">No data loaded</div>
             </div>
         </div>
-        <div class="control-group">
-            <label>TCP Flow Visualization</label>
-            <div style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
-                <label style="display: flex; align-items: center; margin-bottom: 5px;">
-                    <input type="checkbox" id="showTcpFlows" style="margin-right: 8px;" checked>
-                    Show TCP Flow Packets
-                </label>
-                <label style="display: flex; align-items: center; margin-bottom: 5px;">
-                    <input type="checkbox" id="showEstablishment" style="margin-right: 8px;" checked>
-                    Show Establishment Phase
-                </label>
-                <label style="display: flex; align-items: center; margin-bottom: 5px;">
-                    <input type="checkbox" id="showDataTransfer" style="margin-right: 8px;" checked>
-                    Show Data Transfer Phase
-                </label>
-                <label style="display: flex; align-items: center; margin-bottom: 5px;">
-                    <input type="checkbox" id="showClosing" style="margin-right: 8px;" checked>
-                    Show Closing Phase
-                </label>
-                <div id="tcpFlowStats" style="color: #666; font-size: 11px; margin-top: 10px;">
-                    No TCP flows detected
+        <div class="control-group collapsible collapsed">
+            <label class="collapsible-header"><span>IP Statistics</span><span class="collapse-icon">&#x25BC;</span></label>
+            <div class="collapsible-body">
+                <div id="ipStats" style="min-width: 250px; max-height: 200px; overflow-y: auto; border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
+                    <div style="color: #666;">Select IPs to view statistics</div>
+                </div>
+            </div>
+        </div>
+        <div class="control-group collapsible collapsed">
+            <label class="collapsible-header"><span>TCP Flow Visualization</span><span class="collapse-icon">&#x25BC;</span></label>
+            <div class="collapsible-body">
+                <div style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
+                    <label style="display: flex; align-items: center; margin-bottom: 5px;">
+                        <input type="checkbox" id="showTcpFlows" style="margin-right: 8px;" checked>
+                        Show TCP Flow Packets
+                    </label>
+                    <label style="display: flex; align-items: center; margin-bottom: 5px;">
+                        <input type="checkbox" id="showEstablishment" style="margin-right: 8px;" checked>
+                        Show Establishment Phase
+                    </label>
+                    <label style="display: flex; align-items: center; margin-bottom: 5px;">
+                        <input type="checkbox" id="showDataTransfer" style="margin-right: 8px;" checked>
+                        Show Data Transfer Phase
+                    </label>
+                    <label style="display: flex; align-items: center; margin-bottom: 5px;">
+                        <input type="checkbox" id="showClosing" style="margin-right: 8px;" checked>
+                        Show Closing Phase
+                    </label>
+                    <div id="tcpFlowStats" style="color: #666; font-size: 11px; margin-top: 10px;">
+                        No TCP flows detected
+                    </div>
                 </div>
             </div>
         </div>
         
-        <div class="control-group">
-            <label>Ground Truth Events</label>
-            <div style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
-                <label style="display: flex; align-items: center; margin-bottom: 5px;">
-                    <input type="checkbox" id="showGroundTruth" style="margin-right: 8px;">
-                    Show Ground Truth Event Boxes
-                </label>
-                <div id="groundTruthStats" style="color: #666; font-size: 11px; margin-top: 5px;">
-                    Loading ground truth data...
+        <div class="control-group collapsible collapsed">
+            <label class="collapsible-header"><span>Ground Truth Events</span><span class="collapse-icon">&#x25BC;</span></label>
+            <div class="collapsible-body">
+                <div style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
+                    <label style="display: flex; align-items: center; margin-bottom: 5px;">
+                        <input type="checkbox" id="showGroundTruth" style="margin-right: 8px;">
+                        Show Ground Truth Event Boxes
+                    </label>
+                    <div id="groundTruthStats" style="color: #666; font-size: 11px; margin-top: 5px;">
+                        Loading ground truth data...
+                    </div>
                 </div>
             </div>
         </div>
-        <div class="control-group">
-            <label>View Mode</label>
-            <div style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
-                <div style="margin-bottom: 10px;">
-                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom: 5px;">
-                        <input type="radio" id="renderModeCircles" name="renderMode" value="circles" checked>
-                        <span>Arc View (Circles)</span>
-                    </label>
-                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                        <input type="radio" id="renderModeBars" name="renderMode" value="bars">
-                        <span>Stacked Bars View</span>
-                    </label>
+        <div class="control-group collapsible collapsed">
+            <label class="collapsible-header"><span>View Mode</span><span class="collapse-icon">&#x25BC;</span></label>
+            <div class="collapsible-body">
+                <div style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
+                    <div style="margin-bottom: 10px;">
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom: 5px;">
+                            <input type="radio" id="renderModeCircles" name="renderMode" value="circles" checked>
+                            <span>Arc View (Circles)</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
+                            <input type="radio" id="renderModeBars" name="renderMode" value="bars">
+                            <span>Stacked Bars View</span>
+                        </label>
+                    </div>
                 </div>
             </div>
         </div>
         <button id="resetView">Reset View</button>
         </div>
       </aside>
-    </div>
     <div id="tooltip" class="tooltip" style="display: none;"></div>
     <!-- Flow List Modal -->
     <div id="flowListModalOverlay" class="modal-overlay" role="dialog" aria-modal="true" aria-labelledby="flowListModalTitle">

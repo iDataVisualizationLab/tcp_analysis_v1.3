@@ -1,7 +1,7 @@
 // Overview chart module: manages stacked invalid flows overview, brush, and legends
 import { GLOBAL_BIN_COUNT } from './config.js';
 import { createOverviewFlowLegend } from './legends.js';
-import { showFlowListModal } from './sidebar.js';
+import { showFlowListModal } from './control-panel.js';
 import { createFullRangeTickFormatter } from './src/utils/formatters.js';
 // Internal state
 let overviewSvg, overviewXScale, overviewBrush, overviewWidth = 0, overviewHeight = 100;
@@ -696,7 +696,7 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
         }
     } catch {}
 
-    // Note: Flow legends now displayed horizontally above the chart instead of in sidebar
+    // Note: Flow legends now displayed horizontally above the chart instead of in control panel
 
     const overviewXAxis = d3.axisBottom(overviewXScale)
         .tickFormat(createFullRangeTickFormatter(timeExtent));

@@ -1,60 +1,84 @@
-// Sidebar logic for IP Connection Analysis
-// This file contains all logic for the sidebar UI and its event handlers
+// Control panel logic for IP Connection Analysis
+// This file contains all logic for the control panel UI and its event handlers
 import { getFlowColors, getInvalidLabels, getInvalidReason, getFlowColor } from './legends.js';
 import { MAX_FLOW_LIST_ITEMS, FLOW_LIST_RENDER_BATCH } from './config.js';
 
-export function initSidebar(options) {
+export function initControlPanel(options) {
     // options: { onResetView, ... }
-    const sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
+    const panel = document.getElementById('control-panel');
+    if (!panel) return;
 
-    const desiredWidth = 340; // px
+    const dragHandle = document.getElementById('control-panel-drag-handle');
 
-    // Ensure sidebar fills viewport and scrolls
-    sidebar.style.position = 'fixed';
-    sidebar.style.top = '0';
-    sidebar.style.right = '0';
-    sidebar.style.height = '100vh';
-    sidebar.style.overflowY = 'auto';
-    sidebar.style.width = `${desiredWidth}px`;
-    sidebar.style.boxSizing = 'border-box';
-    sidebar.style.background = '#fff';
-    sidebar.style.borderLeft = '1px solid #e6e6e6';
-    sidebar.style.display = 'flex';
-    sidebar.style.flexDirection = 'column';
-    sidebar.style.zIndex = '100';
-    // Leave space for fixed footer button
-    sidebar.style.paddingBottom = '72px';
+    // --- Drag-to-move + click-to-collapse (like legend panel in timearcs) ---
+    if (dragHandle) {
+        let dragState = null;
 
-    // Push main content so it doesn't hide behind fixed sidebar
-    const applyBodyPadding = () => {
-        document.body.style.paddingRight = `${sidebar.getBoundingClientRect().width}px`;
-    };
-    applyBodyPadding();
-    window.addEventListener('resize', applyBodyPadding);
+        const onDrag = (e) => {
+            if (!dragState) return;
+            const dist = Math.hypot(e.clientX - dragState.startX, e.clientY - dragState.startY);
+            if (dist > 5) {
+                dragState.hasMoved = true;
+                panel.classList.add('control-panel-dragging');
+                const newLeft = Math.max(0, Math.min(window.innerWidth - 60, e.clientX - dragState.offsetX));
+                const newTop = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dragState.offsetY));
+                panel.style.left = `${newLeft}px`;
+                panel.style.top = `${newTop}px`;
+                panel.style.right = 'auto';
+            }
+        };
+        const onDragEnd = () => {
+            if (dragState && !dragState.hasMoved) {
+                // Click — toggle collapse
+                panel.classList.toggle('control-panel-collapsed');
+            }
+            if (dragState) {
+                panel.classList.remove('control-panel-dragging');
+                dragState = null;
+            }
+            document.removeEventListener('mousemove', onDrag);
+            document.removeEventListener('mouseup', onDragEnd);
+        };
 
-    // Make Reset View button sticky at the bottom
+        dragHandle.addEventListener('mousedown', (e) => {
+            if (e.button !== 0) return;
+            const rect = panel.getBoundingClientRect();
+            dragState = {
+                offsetX: e.clientX - rect.left,
+                offsetY: e.clientY - rect.top,
+                startX: e.clientX,
+                startY: e.clientY,
+                hasMoved: false
+            };
+            document.addEventListener('mousemove', onDrag);
+            document.addEventListener('mouseup', onDragEnd);
+            e.preventDefault();
+        });
+    }
+
+    // Reset View button — keep in normal flow inside control panel
     const resetBtn = document.getElementById('resetView');
     if (resetBtn) {
-        // Fix to viewport bottom aligned with sidebar
-        resetBtn.style.position = 'fixed';
-        resetBtn.style.right = '0';
-        resetBtn.style.bottom = '0';
-        resetBtn.style.width = `${desiredWidth}px`;
-        resetBtn.style.zIndex = '110';
-        resetBtn.style.background = '#fff';
-        resetBtn.style.borderTop = '1px solid #eee';
-        resetBtn.style.padding = '12px 0';
+        resetBtn.style.position = '';
+        resetBtn.style.width = '100%';
         resetBtn.style.margin = '0';
-        resetBtn.style.display = 'block';
-        resetBtn.style.textAlign = 'center';
+        resetBtn.style.padding = '10px 0';
+        resetBtn.style.borderTop = '1px solid #eee';
+        resetBtn.style.borderRadius = '0 0 6px 6px';
         if (options && typeof options.onResetView === 'function') {
             resetBtn.onclick = options.onResetView;
         }
     }
+
+    // Wire up collapsible control-group sections
+    panel.querySelectorAll('.control-group.collapsible > .collapsible-header').forEach(header => {
+        header.addEventListener('click', () => {
+            header.parentElement.classList.toggle('collapsed');
+        });
+    });
 }
 
-// Sidebar render and update helpers (moved from main file)
+// Control panel render and update helpers (moved from main file)
 export function createIPCheckboxes(uniqueIPs, onChange) {
     const container = document.getElementById('ipCheckboxes');
     if (!container) return;
@@ -461,7 +485,7 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
     if (countEl) countEl.textContent = `${total.toLocaleString()} flow(s)`;
 }
 
-export function wireSidebarControls(opts) {
+export function wireControlPanelControls(opts) {
     const on = (id, type, handler) => { const el = document.getElementById(id); if (el && handler) el.addEventListener(type, handler); };
     on('ipSearch', 'input', (e) => { if (opts.onIpSearch) opts.onIpSearch(e.target.value); });
     on('selectAllIPs', 'click', () => { if (opts.onSelectAllIPs) opts.onSelectAllIPs(); });
@@ -486,6 +510,49 @@ export function wireSidebarControls(opts) {
     }
 }
 
+// Inline SVG arc icon matching the flag color legend in the packet view
+function flagArcIcon(color) {
+    // Semi-circle arc curving right, matching legends.js drawFlagLegend arc shape
+    return `<svg width="14" height="14" viewBox="0 0 14 14" style="flex-shrink:0; margin-right:4px;"><path d="M 7 1 A 6 6 0 0 1 7 13" fill="none" stroke="${color}" stroke-width="4" stroke-linecap="round"/></svg>`;
+}
+
+// Order flags by TCP lifecycle: handshake → transfer → closing, unknowns at end
+const FLAG_PHASE_ORDER = [
+    'SYN', 'SYN+ACK',          // Handshake
+    'ACK', 'PSH', 'PSH+ACK',   // Data transfer
+    'FIN', 'FIN+ACK',           // Graceful close
+    'RST', 'RST+ACK',          // Abortive close
+    'OTHER'                     // Catch-all
+];
+
+function sortFlagsByTcpPhase(entries) {
+    const order = new Map(FLAG_PHASE_ORDER.map((f, i) => [f, i]));
+    return entries.sort(([a], [b]) => (order.get(a) ?? 99) - (order.get(b) ?? 99));
+}
+
+// Build 2-column grid HTML from sorted [flag, count] entries
+// Column-first order: fill left column top-to-bottom, then right column (max 6 rows)
+function buildFlagStatsGrid(sortedFlags, flagColors) {
+    const maxRows = 6;
+    // Fill first column up to maxRows before starting second column
+    const col1Count = Math.min(maxRows, sortedFlags.length);
+    const col1 = sortedFlags.slice(0, col1Count);
+    const col2 = sortedFlags.slice(col1Count);
+
+    const renderItem = ([flag, count]) => {
+        const color = flagColors[flag] || '#95a5a6';
+        return `<div style="display:flex; align-items:center; cursor:pointer; min-width:0;" data-flag="${flag}">${flagArcIcon(color)}<span style="white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${flag}: ${count.toLocaleString()}</span></div>`;
+    };
+
+    let html = '<div style="display:flex; gap:8px;">';
+    html += `<div style="display:flex; flex-direction:column; gap:3px; flex:1; min-width:0;">${col1.map(renderItem).join('')}</div>`;
+    if (col2.length > 0) {
+        html += `<div style="display:flex; flex-direction:column; gap:3px; flex:1; min-width:0;">${col2.map(renderItem).join('')}</div>`;
+    }
+    html += '</div>';
+    return html;
+}
+
 export function updateFlagStats(packets, classifyFlags, flagColors) {
     const container = document.getElementById('flagStats');
     if (!container) return;
@@ -500,41 +567,40 @@ export function updateFlagStats(packets, classifyFlags, flagColors) {
         const count = packet.count || 1;
         flagCounts[ft] = (flagCounts[ft] || 0) + count;
     });
-    const sortedFlags = Object.entries(flagCounts).sort(([,a],[,b]) => b - a);
-    let html = '';
-    sortedFlags.forEach(([flag, count]) => {
-        const color = flagColors[flag] || '#95a5a6';
-        const hasDefinedColor = Object.prototype.hasOwnProperty.call(flagColors, flag);
-        html += `
-            <div style="display:flex; align-items:center; margin-bottom:3px; cursor:pointer;" data-flag="${flag}">
-                <div style="width:12px; height:12px; background-color:${color}; margin-right:8px; border-radius:2px; ${hasDefinedColor ? '' : 'border:1px solid #666;'}"></div>
-                <span>${flag}: ${count.toLocaleString()}</span>
-                ${hasDefinedColor ? '' : '<span style="color:#666; font-size:10px; margin-left:5px;">(no color)</span>'}
-            </div>`;
-    });
-    container.innerHTML = html || '<div style="color:#666;">No TCP packets found</div>';
+    const sortedFlags = sortFlagsByTcpPhase(Object.entries(flagCounts));
+    container.innerHTML = sortedFlags.length > 0 ? buildFlagStatsGrid(sortedFlags, flagColors) : '<div style="color:#666;">No TCP packets found</div>';
 }
 
-export function updateFlagStatsFromPrecomputed(flagStats, flagColors) {
-    const container = document.getElementById('flagStats');
+export function updateSizeLegend(globalMaxBinCount, radiusMin, radiusMax) {
+    const container = document.getElementById('sizeLegend');
     if (!container) return;
-    if (!flagStats || Object.keys(flagStats).length === 0) {
-        container.innerHTML = '<div style="color: #666;">No data to display</div>';
+    const maxCount = Math.max(1, globalMaxBinCount);
+    if (maxCount <= 1) {
+        container.innerHTML = '<div style="color:#666;">No data loaded</div>';
         return;
     }
-    const sortedFlags = Object.entries(flagStats).sort(([,a],[,b]) => b - a);
-    let html = '';
-    sortedFlags.forEach(([flag, count]) => {
-        const color = flagColors[flag] || '#95a5a6';
-        const hasDefinedColor = Object.prototype.hasOwnProperty.call(flagColors, flag);
-        html += `
-            <div style="display:flex; align-items:center; margin-bottom:3px; cursor:pointer;" data-flag="${flag}">
-                <div style="width:12px; height:12px; background-color:${color}; margin-right:8px; border-radius:2px; ${hasDefinedColor ? '' : 'border:1px solid #666;'}"></div>
-                <span>${flag}: ${count.toLocaleString()}</span>
-                ${hasDefinedColor ? '' : '<span style="color:#666; font-size:10px; margin-left:5px;">(no color)</span>'}
-            </div>`;
-    });
-    container.innerHTML = html || '<div style="color:#666;">No TCP packets found</div>';
+    const midCount = Math.max(1, Math.round(maxCount / 2));
+    const values = [1, midCount, maxCount];
+    // sqrtScale matching ip_bar_diagram.js rScale
+    const rScale = (v) => radiusMin + (radiusMax - radiusMin) * Math.sqrt((v - 1) / Math.max(1, maxCount - 1));
+    const radii = values.map(v => Math.max(radiusMin, rScale(v)));
+    const maxR = Math.max(...radii);
+
+    // Horizontal layout: circles side by side, bottom-aligned, with labels below
+    const gap = 12;
+    const pad = 4;
+    let items = '';
+    for (let i = 0; i < values.length; i++) {
+        const r = radii[i];
+        const d = r * 2;
+        const topPad = (maxR - r) * 2; // push smaller circles down to bottom-align
+        items += `<div style="display:flex; flex-direction:column; align-items:center; gap:2px;">` +
+            `<svg width="${d + 2}" height="${d + 2}" style="margin-top:${topPad}px;"><circle cx="${r + 1}" cy="${r + 1}" r="${r}" fill="none" stroke="#555" stroke-width="1"/></svg>` +
+            `<span style="font-size:10px; color:#333; white-space:nowrap;">${values[i].toLocaleString()}</span>` +
+            `</div>`;
+    }
+
+    container.innerHTML = `<div style="display:flex; align-items:flex-end; gap:${gap}px; padding:${pad}px 0;">${items}</div>`;
 }
 
 export function updateIPStats(packets, flagColors, formatBytes) {

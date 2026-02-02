@@ -1,6 +1,6 @@
 // Extracted from ip_arc_diagram_3.html inline script
 // This file contains all logic for the IP Connection Analysis visualization
-import { initSidebar, createIPCheckboxes as sbCreateIPCheckboxes, filterIPList as sbFilterIPList, filterFlowList as sbFilterFlowList, updateFlagStats as sbUpdateFlagStats, updateIPStats as sbUpdateIPStats, createFlowListCapped as sbCreateFlowListCapped, updateTcpFlowStats as sbUpdateTcpFlowStats, updateGroundTruthStatsUI as sbUpdateGroundTruthStatsUI, wireSidebarControls as sbWireSidebarControls, showFlowProgress as sbShowFlowProgress, updateFlowProgress as sbUpdateFlowProgress, hideFlowProgress as sbHideFlowProgress, wireFlowListModalControls as sbWireFlowListModalControls, showCsvProgress as sbShowCsvProgress, updateCsvProgress as sbUpdateCsvProgress, hideCsvProgress as sbHideCsvProgress, refreshIPCollapseState as sbRefreshIPCollapseState } from './sidebar.js';
+import { initControlPanel, createIPCheckboxes as sbCreateIPCheckboxes, filterIPList as sbFilterIPList, filterFlowList as sbFilterFlowList, updateFlagStats as sbUpdateFlagStats, updateIPStats as sbUpdateIPStats, createFlowListCapped as sbCreateFlowListCapped, updateTcpFlowStats as sbUpdateTcpFlowStats, updateGroundTruthStatsUI as sbUpdateGroundTruthStatsUI, wireControlPanelControls as sbWireControlPanelControls, showFlowProgress as sbShowFlowProgress, updateFlowProgress as sbUpdateFlowProgress, hideFlowProgress as sbHideFlowProgress, wireFlowListModalControls as sbWireFlowListModalControls, showCsvProgress as sbShowCsvProgress, updateCsvProgress as sbUpdateCsvProgress, hideCsvProgress as sbHideCsvProgress, refreshIPCollapseState as sbRefreshIPCollapseState, updateSizeLegend as sbUpdateSizeLegend } from './control-panel.js';
 import { renderInvalidLegend as sbRenderInvalidLegend, renderClosingLegend as sbRenderClosingLegend, drawFlagLegend as drawFlagLegendFromModule } from './legends.js';
 import { initOverview, createOverviewChart, createOverviewFromAdaptive, createFlowOverviewChart, updateBrushFromZoom, updateOverviewInvalidVisibility, setBrushUpdating, refreshFlowOverview } from './overview_chart.js';
 import { FLOW_RECONSTRUCT_BATCH } from './config.js';
@@ -326,111 +326,13 @@ function renderMarksForLayerLocal(layer, data, rScale) {
     return renderCirclesWithOptions(layer, data, rScale);
 }
 
-// Draw a circle-size legend (bottom-right) for smallest/middle/largest counts
-function drawSizeLegend(targetSvgOverride = null, targetWidth = null, targetHeight = null, axisY = null) {
-    try {
-        const targetSvg = targetSvgOverride || svg;
-        const w = (typeof targetWidth === 'number') ? targetWidth : width;
-        const h = (typeof targetHeight === 'number') ? targetHeight : height;
-        if (!targetSvg || !w || !h) return;
-        // Remove previous legend if any
-        targetSvg.select('.size-legend').remove();
-
-        const maxCount = Math.max(1, globalMaxBinCount);
-        const midCount = Math.max(1, Math.round(maxCount / 2));
-        const values = [1, midCount, maxCount];
-
-        const rScale = d3.scaleSqrt().domain([1, maxCount]).range([RADIUS_MIN, RADIUS_MAX]);
-        const radii = values.map(v => rScale(v));
-        const maxR = Math.max(...radii, RADIUS_MIN);
-
-        // Layout constants
-        const padding = 8;
-        const labelGap = 32; // top headroom for title + labels
-        const legendWidth = maxR * 2 + padding * 2; // compact width
-        const legendHeight = 2 * maxR + padding + (padding + labelGap); // space for title + labels
-
-    const anchorY = (typeof axisY === 'number') ? axisY : h;
-    const legendX = Math.max(0, w - legendWidth - 12);
-    const legendY = Math.max(0, (anchorY - legendHeight - 8));
-
-    const g = targetSvg.append('g')
-        .attr('class', 'size-legend')
-        .attr('transform', `translate(${legendX},${legendY})`)
-        .style('pointer-events', 'none');
-
-        // Background
-        g.append('rect')
-            .attr('x', 0)
-            .attr('y', 0)
-            .attr('rx', 6)
-            .attr('ry', 6)
-            .attr('width', legendWidth)
-            .attr('height', legendHeight)
-            .style('fill', '#fff')
-            .style('opacity', 0.85)
-            .style('stroke', '#ccc');
-
-        // Title
-        g.append('text')
-            .attr('x', legendWidth / 2)
-            .attr('y', padding + 10)
-            .attr('text-anchor', 'middle')
-            .style('font-size', '12px')
-            .style('font-weight', '600')
-            .style('fill', '#333')
-            .text('Circle Size');
-
-        // Baseline at the bottom inside the box
-        const innerTop = padding + labelGap; // extra top room for labels
-        const baseline = innerTop + 2 * maxR;
-        const cx = padding + maxR; // center x for all circles
-
-        // Draw nested circles (bottom-aligned), no fill. Draw largest first.
-        const order = [2, 1, 0]; // indices for [max, mid, min]
-        order.forEach((idx) => {
-            const v = values[idx];
-            const r = Math.max(RADIUS_MIN, radii[idx]);
-            const cy = baseline - r; // bottom-aligned
-
-            g.append('circle')
-                .attr('cx', cx)
-                .attr('cy', cy)
-                .attr('r', r)
-                .style('fill', 'none')
-                .style('stroke', '#555');
-
-            // Label centered above each circle
-            g.append('text')
-                .attr('x', cx)
-                .attr('y', cy - r - 4)
-                .attr('text-anchor', 'middle')
-                .style('font-size', '12px')
-                .style('fill', '#333')
-                .text(v);
-        });
-    } catch (_) { /* ignore legend draw errors */ }
+// Size legend moved to control panel; update it there
+function drawSizeLegend() {
+    sbUpdateSizeLegend(globalMaxBinCount, RADIUS_MIN, RADIUS_MAX);
 }
 
-// Wrapper function for the extracted flag legend
-function drawFlagLegend() {
-    // Default to bottom overlay if available; fallback to main svg
-    const targetSvg = bottomOverlayRoot || svg;
-    const w = bottomOverlayRoot ? width : width;
-    const h = bottomOverlayRoot ? bottomOverlayHeight : height;
-    const axisBaseY = bottomOverlayRoot ? Math.max(20, bottomOverlayHeight - 20) : (height - 12);
-    drawFlagLegendFromModule({ 
-        svg: targetSvg, 
-        width: w, 
-        height: h, 
-        flagColors, 
-        globalMaxBinCount, 
-        RADIUS_MIN, 
-        RADIUS_MAX, 
-        d3,
-        axisY: axisBaseY
-    });
-}
+// Flag color legend moved to control panel; no-op here to keep call sites intact
+function drawFlagLegend() {}
 
 // TCP flag colors, now loaded from flag_colors.json with defaults
 let flagColors = { ...DEFAULT_FLAG_COLORS };
@@ -583,7 +485,7 @@ function initializeBarVisualization() {
         flagColors,
         flowColors
     });
-    initSidebar({
+    initControlPanel({
         onResetView: () => {
             if (state.data.full.length > 0 && zoomTarget && zoom && state.data.timeExtent && state.data.timeExtent[1] > state.data.timeExtent[0]) {
                 isHardResetInProgress = true;
@@ -594,8 +496,8 @@ function initializeBarVisualization() {
             }
         }
     });
-    // Delegate sidebar event wiring
-    sbWireSidebarControls({
+    // Delegate control panel event wiring
+    sbWireControlPanelControls({
         onIpSearch: (term) => sbFilterIPList(term),
         onSelectAllIPs: () => { document.querySelectorAll('#ipCheckboxes input[type="checkbox"]').forEach(cb => cb.checked = true); updateIPFilter(); },
         onClearAllIPs: () => { document.querySelectorAll('#ipCheckboxes input[type="checkbox"]').forEach(cb => cb.checked = false); updateIPFilter(); },
@@ -1697,7 +1599,7 @@ async function updateIPFilter() {
     return getIPFilterController().updateIPFilter();
 }
 
-// Delegated to sidebar.js
+// Delegated to control-panel.js
 const createIPCheckboxes = (uniqueIPs) => sbCreateIPCheckboxes(uniqueIPs, async () => await updateIPFilter());
 
 const updateFlagStats = (packets) => sbUpdateFlagStats(packets, getFlagType, flagColors);
@@ -2157,19 +2059,17 @@ function updateClosingStats(closings) {
 /**
  * Update the zoom level indicator UI
  */
-function updateZoomIndicator(visibleRangeUs, resolution = null, dataPoints = 0) {
+function updateZoomIndicator(visibleRangeUs, resolution = null) {
     const timeRangeEl = document.getElementById('zoomTimeRange');
     const resEl = document.getElementById('zoomResolution');
-    if (!timeRangeEl) return;
-
-    timeRangeEl.textContent = formatDuration(visibleRangeUs);
+    if (timeRangeEl) timeRangeEl.textContent = '';
 
     if (resEl && resolution) {
         const resConfig = FETCH_RES_BY_NAME[resolution];
         const label = resConfig?.uiInfo?.label || resolution;
-        resEl.textContent = `${label} · ${dataPoints.toLocaleString()} points`;
+        resEl.textContent = label;
     } else if (resEl) {
-        resEl.textContent = dataPoints > 0 ? `${dataPoints.toLocaleString()} points` : '';
+        resEl.textContent = '';
     }
 
     // Update zoom button states when zoom level changes
@@ -3226,16 +3126,7 @@ function visualizeTimeArcs(packets) {
     xScale = d3.scaleLinear().domain(state.data.timeExtent).range([0, width]);
     yScale = d3.scaleLinear().domain([minY, maxY]).range([minY, maxY]);
 
-    // 8. Update zoom indicator
-    const visibleRangeUs = state.data.timeExtent[1] - state.data.timeExtent[0];
-    if (visibleRangeUs > 0) {
-        const resolution = getResolutionForVisibleRange(visibleRangeUs);
-        const dataCount = fetchResManager.singleFileData.get(resolution)?.length || state.data.full.length;
-        updateZoomIndicator(visibleRangeUs, resolution, dataCount);
-        console.log(`[visualizeData] Updated zoom indicator: range=${(visibleRangeUs/60_000_000).toFixed(1)} min, resolution=${resolution}`);
-    }
-
-    // 9. Create SVG structure using extracted module
+    // 8. Create SVG structure using extracted module
     const svgResult = createSVGStructure({
         d3,
         containerId: '#chart',
@@ -3417,6 +3308,12 @@ function visualizeTimeArcs(packets) {
         renderMarksForLayer: renderMarksForLayerLocal
     });
     console.log('[visualizeTimeArcs] fullDomainLayer display set to visible');
+
+    // Update zoom indicator with resolution label
+    const visibleRangeUs = state.data.timeExtent[1] - state.data.timeExtent[0];
+    if (visibleRangeUs > 0) {
+        updateZoomIndicator(visibleRangeUs, initialResolution);
+    }
 
     // 18. Post-render setup
     updateTcpFlowPacketsGlobal();
@@ -3843,7 +3740,7 @@ Check browser console (F12) for detailed error logs.`);
         // Show initial zoom indicator with full data range
         if (state.data.timeExtent && state.data.timeExtent.length === 2) {
             const fullRangeUs = state.data.timeExtent[1] - state.data.timeExtent[0];
-            updateZoomIndicator(fullRangeUs, isPreBinned ? 'seconds' : null, packets.length);
+            updateZoomIndicator(fullRangeUs, isPreBinned ? 'seconds' : null);
         }
 
         // Hide progress
@@ -4891,9 +4788,8 @@ async function loadFlowsFromPath(basePath = DEFAULT_FLOW_DATA_PATH) {
                             visibleRangeUs = capturedFlowTimeExtent[1] - capturedFlowTimeExtent[0];
                         }
 
-                        const dataCount = fetchResManager.singleFileData.get(mappedRes)?.length || state.data.full.length;
-                        updateZoomIndicator(visibleRangeUs, mappedRes, dataCount);
-                        console.log(`[Resolution Sync] Updated packets view to: ${mappedRes}, range=${(visibleRangeUs/60_000_000).toFixed(1)} min, ${dataCount} points`);
+                        updateZoomIndicator(visibleRangeUs, mappedRes);
+                        console.log(`[Resolution Sync] Updated packets view to: ${mappedRes}, range=${(visibleRangeUs/60_000_000).toFixed(1)} min`);
                     }
                 };
             }

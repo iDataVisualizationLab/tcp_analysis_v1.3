@@ -12,33 +12,21 @@ body {
 }
 
 /* Responsive adjustments */
-@media (max-width: 1200px) {
-    #sidebar {
-        flex: 0 0 300px;
-    }
-}
-
 @media (max-width: 900px) {
-    #main-layout {
-        flex-direction: column;
-    }
-
-    #sidebar {
-        flex: 0 0 auto;
-        max-height: 400px;
-    }
-
     body {
         min-width: 600px;
+    }
+    #control-panel {
+        width: 300px;
     }
 }
 h1 {
     color: #343a40;
 }
-/* Layout: chart left, sidebar right */
+/* Layout: chart left, control panel right */
 #main-layout {
     display: flex;
-    gap: 16px;
+    gap: 0;
     align-items: stretch;
     height: 100%;
     min-height: 0; /* enable children to use overflow */
@@ -58,23 +46,118 @@ h1 {
     -webkit-overflow-scrolling: touch;
     position: relative; /* Needed for resize handling */
 }
-#sidebar {
-    flex: 0 0 360px;
-    max-width: 420px;
-    height: 100%;
-    overflow-y: auto; /* independent scroll */
+/* Control panel is a floating panel — removed from flex flow */
+#control-panel {
+    position: fixed;
+    top: 50px;
+    right: 10px;
+    width: 340px;
+    max-height: calc(100vh - 60px);
+    overflow: hidden;
     -webkit-overflow-scrolling: touch;
+    background: rgba(255, 255, 255, 0.75);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+    z-index: 500;
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 0;
+    transition: box-shadow 0.2s;
+}
+#control-panel.control-panel-dragging {
+    box-shadow: 0 10px 40px rgba(0,0,0,0.28);
+}
+/* Drag handle / title bar at top of floating control panel */
+#control-panel-drag-handle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: #f8f9fa;
+    border-bottom: 1px solid #dee2e6;
+    border-radius: 6px 6px 0 0;
+    cursor: pointer;
+    user-select: none;
+    transition: background-color 0.15s;
+    flex-shrink: 0;
+}
+#control-panel-drag-handle:hover {
+    background: #e9ecef;
+}
+#control-panel-drag-handle .control-panel-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    color: #495057;
+}
+#control-panel-collapse-icon {
+    font-size: 10px;
+    color: #868e96;
+    transition: transform 0.2s;
+}
+/* Collapsed state: hide body, keep title bar */
+#control-panel.control-panel-collapsed #control-panel-drag-handle {
+    border-bottom: none;
+    border-radius: 6px;
+}
+#control-panel.control-panel-collapsed .controls {
+    max-height: 0;
+    padding: 0 12px;
+    overflow: hidden;
+}
+#control-panel.control-panel-collapsed #control-panel-collapse-icon {
+    transform: rotate(-90deg);
+}
+#control-panel.control-panel-collapsed #resetView {
+    display: none;
 }
 .controls {
     margin-bottom: 0;
     display: flex;
     flex-direction: column;
     gap: 15px;
+    padding: 12px;
+    overflow-y: auto;
+    flex: 1 1 auto;
+    min-height: 0;
+    max-height: calc(100vh - 100px);
+    transition: max-height 0.3s ease, padding 0.3s ease;
 }
 .control-group {
     display: flex;
     flex-direction: column;
     gap: 5px;
+}
+/* Collapsible control-group sections */
+.control-group.collapsible > .collapsible-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    cursor: pointer;
+    user-select: none;
+    padding: 2px 0;
+}
+.control-group.collapsible > .collapsible-header .collapse-icon {
+    font-size: 10px;
+    color: #868e96;
+    transition: transform 0.2s;
+}
+.control-group.collapsible > .collapsible-body {
+    transition: max-height 0.3s ease, opacity 0.2s ease;
+    overflow: hidden;
+}
+.control-group.collapsible.collapsed > .collapsible-header .collapse-icon {
+    transform: rotate(-90deg);
+}
+.control-group.collapsible.collapsed > .collapsible-body {
+    max-height: 0;
+    opacity: 0;
+    overflow: hidden;
 }
 label {
     font-weight: 600;

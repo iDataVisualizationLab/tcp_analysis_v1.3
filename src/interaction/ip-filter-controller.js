@@ -87,7 +87,7 @@ export function createIPFilterController(dependencies) {
             state.data.filtered = filtered;
             state.data.version++;
 
-            // Update sidebar statistics with filtered packets
+            // Update control panel statistics with filtered packets
             try { updateFlagStats(filtered); } catch(e) { console.warn('[updateIPFilter] Flag stats update failed:', e); }
             try { updateIPStats(filtered); } catch(e) { console.warn('[updateIPFilter] IP stats update failed:', e); }
 

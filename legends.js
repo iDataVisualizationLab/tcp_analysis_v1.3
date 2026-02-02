@@ -1,4 +1,4 @@
-// Legend rendering helpers extracted from sidebar.js and ip_arc_diagram.js
+// Legend rendering helpers extracted from control-panel.js and ip_arc_diagram.js
 // Provides simple DOM injection for legend panels with a title + items
 
 export function renderInvalidLegend(panelEl, legendItemsHtml, totalText) {
@@ -11,7 +11,7 @@ export function renderClosingLegend(panelEl, legendItemsHtml, totalText) {
     panelEl.innerHTML = `<div style="font-weight:600; margin-bottom:6px;">${totalText}</div>${legendItemsHtml}`;
 }
 
-// Flow legend helper functions extracted from sidebar.js
+// Flow legend helper functions extracted from control-panel.js
 export function getFlowColors(flowColors = {}) {
     return {
         graceful: (flowColors.closing && flowColors.closing.graceful) || '#8e44ad',
