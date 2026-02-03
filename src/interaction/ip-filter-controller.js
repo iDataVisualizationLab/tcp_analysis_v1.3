@@ -20,7 +20,6 @@ import { loadFlowData } from '../data/flow-loader.js';
  * @param {Function} dependencies.visualizeTimeArcs - Render visualization
  * @param {Function} dependencies.drawFlagLegend - Draw flag legend
  * @param {Function} dependencies.applyTimearcsTimeRangeZoom - Apply time zoom
- * @param {Function} dependencies.computeForceLayoutPositions - Compute force layout
  * @param {Function} dependencies.updateTcpFlowStats - Update TCP flow stats
  * @param {Function} dependencies.refreshAdaptiveOverview - Refresh overview chart
  * @param {Function} dependencies.calculateGroundTruthStats - Calculate GT stats
@@ -42,7 +41,6 @@ export function createIPFilterController(dependencies) {
         updateFlagStats,
         updateIPStats,
         applyTimearcsTimeRangeZoom,
-        computeForceLayoutPositions,
         updateTcpFlowStats,
         refreshAdaptiveOverview,
         calculateGroundTruthStats,
@@ -156,9 +154,8 @@ export function createIPFilterController(dependencies) {
                 setTimeout(() => {
                     applyTimearcsTimeRangeZoom();
                 }, 150);
-            } else if (state.timearcs.ipOrder && state.timearcs.ipOrder.length > 0) {
-                // Skip force layout if we have TimeArcs IP order - use it directly
-                console.log('[Force Layout] Skipped - using TimeArcs vertical order');
+            } else {
+                // Use TimeArcs vertical order directly
                 console.log('[updateIPFilter] Calling visualizeTimeArcs with', state.data.filtered.length, 'items');
 
                 visualizeTimeArcs(state.data.filtered);
@@ -168,21 +165,6 @@ export function createIPFilterController(dependencies) {
                 setTimeout(() => {
                     applyTimearcsTimeRangeZoom();
                 }, 150);
-            } else {
-                // Compute force layout positions for IPs before visualization
-                console.log('[updateIPFilter] Using force layout path with', state.data.filtered.length, 'items');
-
-                computeForceLayoutPositions(state.data.filtered, selectedIPs, () => {
-                    console.log('[updateIPFilter] Force layout callback - calling visualizeTimeArcs');
-                    visualizeTimeArcs(state.data.filtered);
-
-                    try { drawFlagLegend(); } catch(e) { logCatchError('drawFlagLegend', e); }
-                    // Stats are updated inside visualizeTimeArcs with time range filtering
-
-                    setTimeout(() => {
-                        applyTimearcsTimeRangeZoom();
-                    }, 150);
-                });
             }
         } finally {
             // Remove loading indicator

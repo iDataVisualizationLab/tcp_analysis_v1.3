@@ -55,7 +55,7 @@ The `index.html` redirects to `attack_timearcs.html` by default.
 │  rendering/   bars.js, circles.js, arcPath.js, rows.js   │
 │               arcInteractions.js, tooltip.js             │
 │  scales/      scaleFactory.js, distortion.js (fisheye)   │
-│  layout/      forceSimulation.js, barForceLayout.js      │
+│  layout/      forceSimulation.js                         │
 │  interaction/ zoom.js, dragReorder.js, resize.js         │
 │  data/        binning.js, csvParser.js, flowReconstruction.js
 │               resolution-manager.js, data-source.js      │
@@ -325,7 +325,7 @@ python packets_data/generate_flow_bins_v3.py --input-dir packets_data/attack_flo
 ### Force-Directed Layout
 
 - **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints
-- **BarDiagram**: Simpler vertical ordering via `barForceLayout.js`
+- **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
 
 ### Fisheye Distortion
 
@@ -348,7 +348,7 @@ The fisheye lens effect (`src/plugins/d3-fisheye.js`, wrapped by `src/scales/dis
 Main files import heavily from `/src`:
 - **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`
 - **Data**: `binning.js`, `flowReconstruction.js`, `csvParser.js`, `aggregation.js`, `resolution-manager.js`, `data-source.js`, `component-loader.js`
-- **Layout**: `forceSimulation.js`, `barForceLayout.js`
+- **Layout**: `forceSimulation.js`
 - **Interaction**: `zoom.js`, `arcInteractions.js`, `dragReorder.js`, `resize.js`
 - **Scales**: `scaleFactory.js`, `distortion.js`
 - **Ground Truth**: `groundTruth.js`

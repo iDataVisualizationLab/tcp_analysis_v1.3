@@ -42,11 +42,6 @@ import { renderCircles } from './src/rendering/circles.js';
 import { renderBars, renderMarksForLayer } from './src/rendering/bars.js';
 import { createTooltipHTML } from './src/rendering/tooltip.js';
 import { arcPathGenerator } from './src/rendering/arcPath.js';
-import {
-    buildForceLayoutData,
-    computeForceLayoutPositions as computeForceLayoutPositionsBase,
-    applyForceLayoutPositions as applyForceLayoutPositionsBase
-} from './src/layout/barForceLayout.js';
 import { createZoomBehavior, applyZoomDomain as applyZoomDomainFromModule } from './src/interaction/zoom.js';
 import { setupZoomButtons, updateZoomButtonStates } from './src/interaction/zoomButtons.js';
 import { createDragReorderBehavior } from './src/interaction/dragReorder.js';
@@ -264,11 +259,7 @@ const state = {
     layout: {
         ipPositions: new Map(),   // Global IP positions map
         ipOrder: [],              // Current vertical order of IPs
-        pairs: new Map(),         // Global pairs map for IP pairing system
-        forceLayout: null,        // Force layout object
-        forceNodes: [],           // Force layout nodes
-        forceLinks: [],           // Force layout links
-        isForceLayoutRunning: false // Whether force layout is running
+        pairs: new Map()          // Global pairs map for IP pairing system
     },
 
     // Phase 5: Flows (medium coupling, ~60 refs)
@@ -1584,7 +1575,6 @@ function getIPFilterController() {
             updateFlagStats,
             updateIPStats,
             applyTimearcsTimeRangeZoom,
-            computeForceLayoutPositions,
             updateTcpFlowStats,
             refreshAdaptiveOverview,
             calculateGroundTruthStats,
@@ -1605,76 +1595,6 @@ const createIPCheckboxes = (uniqueIPs) => sbCreateIPCheckboxes(uniqueIPs, async 
 const updateFlagStats = (packets) => sbUpdateFlagStats(packets, getFlagType, flagColors);
 
 const updateIPStats = (packets) => sbUpdateIPStats(packets, flagColors, formatBytes);
-
-// Initialize and run force layout to position IPs
-// Uses extracted module functions with local state management
-function computeForceLayoutPositions(packets, selectedIPs, onComplete) {
-    if (state.layout.isForceLayoutRunning) {
-        LOG('Force layout already running, stopping previous layout');
-        if (state.layout.forceLayout) state.layout.forceLayout.stop();
-    }
-
-    const simWidth = (typeof width !== 'undefined' && width > 0) ? width : 800;
-    const simHeight = (typeof height !== 'undefined' && height > 0) ? height : 600;
-
-    const { nodes, links } = buildForceLayoutData(packets, selectedIPs, { width: simWidth, height: simHeight });
-    
-    if (nodes.length === 0) {
-        if (onComplete) onComplete();
-        return;
-    }
-
-    state.layout.forceNodes = nodes;
-    state.layout.forceLinks = links;
-    
-    console.log(`[Force Layout] Starting with ${nodes.length} nodes and ${links.length} links`);
-
-    // Log link strengths for debugging
-    if (links.length > 0) {
-        const maxCount = Math.max(...links.map(l => l.count));
-        const minCount = Math.min(...links.map(l => l.count));
-        console.log(`[Force Layout] Link counts: min=${minCount}, max=${maxCount}`);
-    }
-
-    // Use module function but with local callback for state management
-    state.layout.forceLayout = computeForceLayoutPositionsBase(packets, selectedIPs, {
-        d3,
-        width: simWidth,
-        height: simHeight,
-        onComplete: (result) => {
-            console.log('[Force Layout] Simulation ended');
-            state.layout.isForceLayoutRunning = false;
-            
-            // Apply positions from module result to global state
-            if (result && result.ipOrder && result.ipPositions) {
-                state.layout.ipOrder = result.ipOrder;
-                result.ipPositions.forEach((pos, ip) => {
-                    state.layout.ipPositions.set(ip, pos);
-                });
-
-                console.log('[Force Layout] Assigned screen positions:',
-                    state.layout.ipOrder.map((ip, idx) => ({ ip, y: state.layout.ipPositions.get(ip) })));
-
-                // Update the visualization to use new positions
-                if (svg && mainGroup) {
-                    try {
-                        // Update node labels to new positions with smooth animation
-                        svg.selectAll('.node')
-                            .transition()
-                            .duration(800)
-                            .attr('transform', d => `translate(0,${state.layout.ipPositions.get(d)})`);
-                    } catch (e) {
-                        console.error('[Force Layout] Error updating positions:', e);
-                    }
-                }
-            }
-            
-            if (onComplete) onComplete();
-        }
-    });
-
-    state.layout.isForceLayoutRunning = true;
-}
 
 // TCP States (matching tcp_analysis.py) - now imported as TCP_STATES
 
