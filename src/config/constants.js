@@ -19,25 +19,25 @@ export const MIN_IP_SPACING_WITHIN_COMPONENT = 10;
 export const INTER_COMPONENT_GAP = 10;
 
 export const PROTOCOL_COLORS = new Map([
-  ['TCP', '#1f77b4'],
-  ['UDP', '#2ca02c'],
-  ['ICMP', '#ff7f0e'],
-  ['GRE', '#9467bd'],
-  ['ARP', '#8c564b'],
-  ['DNS', '#17becf'],
+    ['TCP', '#1f77b4'],
+    ['UDP', '#2ca02c'],
+    ['ICMP', '#ff7f0e'],
+    ['GRE', '#9467bd'],
+    ['ARP', '#8c564b'],
+    ['DNS', '#17becf'],
 ]);
 
 export const DEFAULT_COLOR = '#6c757d';
 export const NEUTRAL_GREY = '#9e9e9e';
 
 export const LENS_DEFAULTS = {
-  magnification: 5,
-  bandRadius: 0.045,
+    magnification: 5,
+    bandRadius: 0.045,
 };
 
 export const FISHEYE_DEFAULTS = {
-  distortion: 5,
-  effectRadius: 0.5,
+    distortion: 5,
+    effectRadius: 0.5,
 };
 
 // === Bar Diagram Specific Constants ===
@@ -50,7 +50,7 @@ export const RADIUS_MIN = 3;
 export const RADIUS_MAX = 15;
 
 // Row layout
-export const ROW_GAP = 30;
+export const ROW_GAP = 50;
 export const TOP_PAD = 30;
 
 // TCP States (matching tcp_analysis.py)

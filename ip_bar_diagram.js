@@ -259,7 +259,9 @@ const state = {
     layout: {
         ipPositions: new Map(),   // Global IP positions map
         ipOrder: [],              // Current vertical order of IPs
-        pairs: new Map()          // Global pairs map for IP pairing system
+        pairs: new Map(),         // Global pairs map for IP pairing system
+        ipPairCounts: new Map(),  // Count of unique destination IPs per source IP
+        ipRowHeights: new Map()   // Per-IP row heights based on pair count
     },
 
     // Phase 5: Flows (medium coupling, ~60 refs)
@@ -287,6 +289,9 @@ function renderBarsWithOptions(layer, binned) {
         flagColors,
         globalMaxBinCount,
         ROW_GAP,
+        ipRowHeights: state.layout.ipRowHeights,
+        ipPairCounts: state.layout.ipPairCounts,
+        ipPositions: state.layout.ipPositions,
         formatBytes,
         formatTimestamp,
         d3
@@ -300,6 +305,9 @@ function renderCirclesWithOptions(layer, binned, rScale) {
         rScale,
         flagColors,
         RADIUS_MIN,
+        ROW_GAP,
+        ipRowHeights: state.layout.ipRowHeights,
+        ipPairCounts: state.layout.ipPairCounts,
         mainGroup,
         arcPathGenerator,
         findIPPosition,

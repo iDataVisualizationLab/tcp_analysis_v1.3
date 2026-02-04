@@ -322,6 +322,35 @@ python packets_data/generate_flow_bins_v3.py --input-dir packets_data/attack_flo
 - Converts timestamps to microseconds for alignment with packet data
 - Filters events by selected IPs for contextual display
 
+### IP Pair Layout System
+
+The visualization uses a sophisticated layout system to prevent overlapping when multiple IP pairs share the same source IP row:
+
+**Per-IP Dynamic Row Heights** (`src/layout/ipPositioning.js`):
+- `computeIPPairCounts()` counts unique destination IPs per source IP
+- Each IP row height is calculated as: `max(ROW_GAP, pairCount * 12 + 8)` pixels
+- `ipRowHeights` Map stored in state for rendering access
+- Cumulative positioning: each IP's y = previous IP's y + previous IP's row height
+
+**IP Pair Vertical Offsets** (`src/rendering/bars.js`, `src/rendering/circles.js`):
+- Pairs within a row are ordered by time of first packet (earliest first)
+- Each pair gets a sub-row offset: `pairIndex * (subRowHeight + SUB_ROW_GAP)`
+- First pair (index 0) aligns with the IP label baseline
+- Subsequent pairs grow downward within the row's allocated height
+- `makeIpPairKey(srcIp, dstIp)` creates canonical keys (alphabetically sorted)
+
+**Arc Path Connections** (`src/rendering/arcPath.js`):
+- `arcPathGenerator()` accepts optional `srcY` and `dstY` for offset positions
+- Hover handlers calculate both source and destination offsets using `calculateYPosWithOffset()`
+- Arcs connect circle-to-circle at their actual offset positions, not baselines
+
+**Key Data Structures**:
+```javascript
+// ipPairOrderByRow: Map<yPos, { order: Map<ipPairKey, index>, count: number }>
+// ipRowHeights: Map<ip, heightInPixels>
+// ipPairCounts: Map<ip, numberOfUniquePairs>
+```
+
 ### Force-Directed Layout
 
 - **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints

@@ -42,7 +42,7 @@ export function gradientIdForLink(d, sanitizeId) {
  * Generate curved arc path for bar diagram visualization.
  * Uses flag-based curvature to distinguish different packet types.
  * @param {Object} d - Packet data with timestamp, src_ip, dst_ip, flags
- * @param {Object} options - {xScale, ipPositions, pairs, findIPPosition, flagCurvature}
+ * @param {Object} options - {xScale, ipPositions, pairs, findIPPosition, flagCurvature, srcY, dstY}
  * @returns {string} SVG path string
  */
 export function arcPathGenerator(d, options) {
@@ -51,11 +51,13 @@ export function arcPathGenerator(d, options) {
         ipPositions,
         pairs,
         findIPPosition,
-        flagCurvature = FLAG_CURVATURE
+        flagCurvature = FLAG_CURVATURE,
+        srcY,  // Optional: actual source y position (with offset)
+        dstY   // Optional: actual destination y position (with offset)
     } = options;
 
     if (!xScale || !ipPositions || !d) return "";
-    
+
     // Handle missing required properties
     if (!d.src_ip || !d.dst_ip) return "";
 
@@ -66,8 +68,9 @@ export function arcPathGenerator(d, options) {
         : (d.timestamp ?? d.binStart ?? 0);
     const timestampInt = Math.floor(timestamp);
     const x = xScale(timestampInt);
-    const y1 = findIPPosition(d.src_ip, d.src_ip, d.dst_ip, pairs, ipPositions);
-    const y2 = findIPPosition(d.dst_ip, d.src_ip, d.dst_ip, pairs, ipPositions);
+    // Use provided y positions if available, otherwise fall back to baseline positions
+    const y1 = srcY !== undefined ? srcY : findIPPosition(d.src_ip, d.src_ip, d.dst_ip, pairs, ipPositions);
+    const y2 = dstY !== undefined ? dstY : findIPPosition(d.dst_ip, d.src_ip, d.dst_ip, pairs, ipPositions);
 
     if (y1 === 0 || y2 === 0 || y1 === y2) return "";
 
