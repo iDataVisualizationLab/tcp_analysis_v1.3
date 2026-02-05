@@ -351,11 +351,18 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 - Hover handlers calculate both source and destination offsets using `calculateYPosWithOffset()`
 - Arcs connect circle-to-circle at their actual offset positions, not baselines
 
+**Row Collapse Behavior**:
+- All IP rows with multiple pairs start **collapsed by default** (`defaultCollapseApplied` flag)
+- `state.layout.collapsedIPs` Set tracks which IPs have their sub-rows merged
+- Click individual IP labels to expand/collapse; "Collapse All"/"Expand All" buttons in control panel
+- Collapsed rows merge all pair bins at same (time, yPos, flagType) into single circles
+
 **Key Data Structures**:
 ```javascript
 // ipPairOrderByRow: Map<yPos, { order: Map<ipPairKey, index>, count: number }>
 // ipRowHeights: Map<ip, heightInPixels>
 // ipPairCounts: Map<ip, numberOfUniquePairs>
+// collapsedIPs: Set<ip> - IPs whose sub-rows are collapsed
 ```
 
 ### Force-Directed Layout

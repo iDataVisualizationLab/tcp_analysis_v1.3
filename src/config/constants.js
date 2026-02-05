@@ -50,7 +50,7 @@ export const RADIUS_MIN = 3;
 export const RADIUS_MAX = 15;
 
 // Row layout
-export const ROW_GAP = 50;
+export const ROW_GAP = 30;
 export const TOP_PAD = 30;
 
 // TCP States (matching tcp_analysis.py)

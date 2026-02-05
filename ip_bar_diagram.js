@@ -60,7 +60,8 @@ import {
     computeIPCounts,
     computeIPPositioning,
     applyIPPositioningToState,
-    computeIPPairOrderByRow
+    computeIPPairOrderByRow,
+    computeIPPairCounts
 } from './src/layout/ipPositioning.js';
 import {
     createSVGStructure,
@@ -110,6 +111,8 @@ let useMultiRes = false;  // Whether to use multi-resolution data
 let currentResolutionLevel = null;  // Current resolution: 'seconds', 'milliseconds', 'raw', or null
 let isInitialResolutionLoad = true;  // Only sync with overview on initial load, then allow free zoom
 let manualResolutionOverride = null;  // User-selected resolution override (null = auto)
+
+let defaultCollapseApplied = false;  // Auto-collapse all multi-pair IP rows on first render
 
 // --- Web Worker for packet filtering ---
 let workerManager = null;
@@ -3433,6 +3436,15 @@ function visualizeTimeArcs(packets) {
     const DOT_RADIUS = 40;
 
     // 6. Compute IP positioning using extracted module
+    // Auto-collapse all multi-pair IP rows on first render
+    if (!defaultCollapseApplied) {
+        defaultCollapseApplied = true;
+        const pairCounts = computeIPPairCounts(packets);
+        for (const [ip, count] of pairCounts) {
+            if (count > 1) state.layout.collapsedIPs.add(ip);
+        }
+    }
+
     state.layout.ipPositions.clear();
     const positioning = computeIPPositioning(packets, {
         state,
