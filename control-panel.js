@@ -21,7 +21,10 @@ export function initControlPanel(options) {
                 dragState.hasMoved = true;
                 panel.classList.add('control-panel-dragging');
                 const newLeft = Math.max(0, Math.min(window.innerWidth - 60, e.clientX - dragState.offsetX));
-                const newTop = Math.max(0, Math.min(window.innerHeight - 40, e.clientY - dragState.offsetY));
+                // Leave room for the zoom bar attached above the panel
+                const zoomBar = document.getElementById('zoomControlsSection');
+                const zoomBarH = zoomBar ? zoomBar.offsetHeight : 0;
+                const newTop = Math.max(zoomBarH, Math.min(window.innerHeight - 40, e.clientY - dragState.offsetY));
                 panel.style.left = `${newLeft}px`;
                 panel.style.top = `${newTop}px`;
                 panel.style.right = 'auto';
@@ -490,6 +493,8 @@ export function wireControlPanelControls(opts) {
     on('ipSearch', 'input', (e) => { if (opts.onIpSearch) opts.onIpSearch(e.target.value); });
     on('selectAllIPs', 'click', () => { if (opts.onSelectAllIPs) opts.onSelectAllIPs(); });
     on('clearAllIPs', 'click', () => { if (opts.onClearAllIPs) opts.onClearAllIPs(); });
+    on('collapseAllRows', 'click', () => { if (opts.onCollapseAllRows) opts.onCollapseAllRows(); });
+    on('expandAllRows', 'click', () => { if (opts.onExpandAllRows) opts.onExpandAllRows(); });
 
     on('showTcpFlows', 'change', (e) => { if (opts.onToggleShowTcpFlows) opts.onToggleShowTcpFlows(e.target.checked); });
     on('showEstablishment', 'change', (e) => { if (opts.onToggleEstablishment) opts.onToggleEstablishment(e.target.checked); });

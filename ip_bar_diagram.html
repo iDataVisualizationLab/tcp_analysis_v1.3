@@ -14,17 +14,6 @@
             <div id="chart"></div>
             <div id="loadingMessage"></div>
         </div>
-        <!-- Zoom controls overlay (outside scrollable area) -->
-        <div id="zoomControlsOverlay">
-            <div id="zoomIndicator">
-                <div id="zoomTimeRange">-</div>
-                <div id="zoomResolution"></div>
-            </div>
-            <div id="zoomButtonsGroup">
-                <button id="zoomInBtn" title="Zoom in">+</button>
-                <button id="zoomOutBtn" title="Zoom out">−</button>
-            </div>
-        </div>
         <!-- Bottom overlay: main chart timeline axis + size/flag legends -->
         <div id="chart-bottom-overlay">
             <svg id="chart-bottom-overlay-svg"></svg>
@@ -41,6 +30,24 @@
         <div id="control-panel-drag-handle">
             <span class="control-panel-title">Controls</span>
             <span id="control-panel-collapse-icon">&#x25BC;</span>
+        </div>
+        <!-- Zoom controls — attached above the panel -->
+        <div id="zoomControlsSection">
+            <div id="zoomControlsOverlay">
+                <div id="zoomIndicator">
+                    <div id="zoomTimeRange">-</div>
+                    <select id="zoomResolution" title="Resolution level - Auto follows zoom, or select manually">
+                        <option value="auto">Auto</option>
+                    </select>
+                    <div id="currentResolutionIndicator" title="Currently active resolution">
+                        <span id="currentResolutionLabel">-</span>
+                    </div>
+                </div>
+                <div id="zoomButtonsGroup">
+                    <button id="zoomInBtn" title="Zoom in">+</button>
+                    <button id="zoomOutBtn" title="Zoom out">−</button>
+                </div>
+            </div>
         </div>
         <div class="controls">
         <div class="control-group">
@@ -62,6 +69,10 @@
             <label style="margin-top:4px;">Packet Count</label>
             <div id="sizeLegend" style="border: 1px solid #dee2e6; padding: 8px; background: white; border-radius: 4px; font-size: 12px;">
                 <div style="color: #666;">No data loaded</div>
+            </div>
+            <div style="margin-top: 6px;">
+                <button id="collapseAllRows" style="margin-right: 10px;" title="Collapse all IP rows to single lines">Collapse All</button>
+                <button id="expandAllRows" title="Expand all IP rows to show sub-rows">Expand All</button>
             </div>
         </div>
         <div class="control-group collapsible collapsed">

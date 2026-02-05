@@ -41,6 +41,7 @@ The `index.html` redirects to `attack_timearcs.html` by default.
                            │
 ┌──────────────────────────┴──────────────────────────────┐
 │  Supporting Modules                                      │
+│  control-panel.js - Floating control panel (drag/collapse)│
 │  sidebar.js      - IP/flow selection UI                  │
 │  legends.js      - Legend rendering                      │
 │  overview_chart.js - Stacked flow overview + brush nav   │
@@ -297,10 +298,10 @@ The `packets` column contains embedded packet data: `delta_ts:flags:dir,...`
 
 The `csv-resolution-manager.js` handles zoom-level dependent packet data loading with 7 resolution levels:
 
-| Resolution | Bin Size | Use When Visible Range |
-|------------|----------|------------------------|
-| hours | 1 hour | > 120 minutes |
-| minutes | 1 minute | > 10 minutes |
+| Resolution | Bin Size | Auto Threshold |
+|------------|----------|----------------|
+| hours | 1 hour | > 2 days |
+| minutes | 1 minute | > 1 hour |
 | seconds | 1 second | > 1 minute |
 | 100ms | 100ms | > 10 seconds |
 | 10ms | 10ms | > 1 second |
@@ -308,6 +309,12 @@ The `csv-resolution-manager.js` handles zoom-level dependent packet data loading
 | raw | individual packets | ≤ 100ms |
 
 Coarse resolutions (hours, minutes, seconds) use single-file `data.csv` files loaded at initialization. Fine resolutions (100ms, 10ms, 1ms, raw) use chunked files loaded on-demand with LRU caching.
+
+**Resolution Selection** (`getResolutionForVisibleRange()` in `ip_bar_diagram.js`):
+- **Auto mode**: Threshold-based — picks the coarsest level whose threshold the visible range exceeds
+- **Manual override**: Dropdown selects an explicit resolution level. The selected level is used directly. When the user zooms in past the next finer level's threshold, it auto-refines one step at a time (e.g., minutes → seconds → 100ms → ...). Never goes coarser than the selected level.
+- The dropdown labels use "+" suffix (e.g., "Minutes+") to indicate zoom-to-finer behavior
+- A **current resolution indicator** badge next to the dropdown shows the active resolution (blue = auto, orange = manual override)
 
 **Generating multi-resolution flow bins**:
 ```bash
@@ -355,6 +362,14 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 
 - **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints
 - **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
+
+### Floating Control Panel
+
+The control panel (`control-panel.js`) is a `position: fixed` aside with drag-to-move and click-to-collapse behavior:
+- **Drag handle**: Title bar at top — click to collapse/expand, drag to reposition
+- **Zoom controls bar**: Positioned above the panel via `position: absolute; bottom: 100%`. Contains resolution dropdown, current resolution indicator badge, and zoom +/- buttons. Stays visible when panel is collapsed. Moves with the panel on drag.
+- **Controls body**: Scrollable area with IP selection, TCP flags, legends, flow visualization options
+- Panel uses `overflow: visible` so the zoom bar (absolutely positioned above) is not clipped
 
 ### Fisheye Distortion
 
