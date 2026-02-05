@@ -29,6 +29,7 @@ export function renderCircles(layer, binned, options) {
         ROW_GAP,
         ipRowHeights,
         ipPairCounts,
+        stableIpPairOrderByRow,
         mainGroup,
         arcPathGenerator,
         findIPPosition,
@@ -47,32 +48,35 @@ export function renderCircles(layer, binned, options) {
 
     const tooltip = d3.select('#tooltip');
 
-    // Collect unique IP pairs per row (yPos) with earliest timestamp for ordering
     const items = (binned || []).filter(d => d);
-    const ipPairsByRow = new Map(); // yPos -> Map(ipPairKey -> earliestTimestamp)
-    for (const d of items) {
-        const yPos = d.yPos !== undefined ? d.yPos : findIPPosition(d.src_ip, d.src_ip, d.dst_ip, pairs, ipPositions);
-        const ipPairKey = makeIpPairKey(d.src_ip, d.dst_ip);
-        if (!ipPairsByRow.has(yPos)) {
-            ipPairsByRow.set(yPos, new Map());
-        }
-        const pairMap = ipPairsByRow.get(yPos);
-        const timestamp = d.binCenter || d.binTimestamp || d.timestamp || Infinity;
-        if (!pairMap.has(ipPairKey) || timestamp < pairMap.get(ipPairKey)) {
-            pairMap.set(ipPairKey, timestamp);
-        }
-    }
 
-    // Create ordered list of IP pairs per row, sorted by earliest timestamp
-    const ipPairOrderByRow = new Map(); // yPos -> Map(ipPairKey -> index)
-    for (const [yPos, pairTimestamps] of ipPairsByRow) {
-        // Sort pairs by their earliest timestamp
-        const orderedPairs = Array.from(pairTimestamps.entries())
-            .sort((a, b) => a[1] - b[1])
-            .map(([pair]) => pair);
-        const orderMap = new Map();
-        orderedPairs.forEach((pair, idx) => orderMap.set(pair, idx));
-        ipPairOrderByRow.set(yPos, { order: orderMap, count: orderedPairs.length });
+    // Use stable pair ordering if provided (prevents row jumping on zoom),
+    // otherwise fall back to computing from visible data
+    let ipPairOrderByRow = stableIpPairOrderByRow;
+    if (!ipPairOrderByRow || ipPairOrderByRow.size === 0) {
+        // Fallback: compute from visible data
+        const ipPairsByRow = new Map();
+        for (const d of items) {
+            const yPos = d.yPos !== undefined ? d.yPos : findIPPosition(d.src_ip, d.src_ip, d.dst_ip, pairs, ipPositions);
+            const ipPairKey = makeIpPairKey(d.src_ip, d.dst_ip);
+            if (!ipPairsByRow.has(yPos)) {
+                ipPairsByRow.set(yPos, new Map());
+            }
+            const pairMap = ipPairsByRow.get(yPos);
+            const timestamp = d.binCenter || d.binTimestamp || d.timestamp || Infinity;
+            if (!pairMap.has(ipPairKey) || timestamp < pairMap.get(ipPairKey)) {
+                pairMap.set(ipPairKey, timestamp);
+            }
+        }
+        ipPairOrderByRow = new Map();
+        for (const [yPos, pairTimestamps] of ipPairsByRow) {
+            const orderedPairs = Array.from(pairTimestamps.entries())
+                .sort((a, b) => a[1] - b[1])
+                .map(([pair]) => pair);
+            const orderMap = new Map();
+            orderedPairs.forEach((pair, idx) => orderMap.set(pair, idx));
+            ipPairOrderByRow.set(yPos, { order: orderMap, count: orderedPairs.length });
+        }
     }
 
     // Layout constants
@@ -124,6 +128,13 @@ export function renderCircles(layer, binned, options) {
             ipPairs: d.ipPairs || [{ src_ip: d.src_ip, dst_ip: d.dst_ip, count: d.count || 1 }],
             _idx: idx
         };
+    });
+
+    // Sort by radius descending so bigger circles render behind smaller ones
+    processed.sort((a, b) => {
+        const rA = a.binned && a.count > 1 ? rScale(a.count) : RADIUS_MIN;
+        const rB = b.binned && b.count > 1 ? rScale(b.count) : RADIUS_MIN;
+        return rB - rA;
     });
 
     // Key function

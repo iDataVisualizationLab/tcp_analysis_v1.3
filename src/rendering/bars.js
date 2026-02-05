@@ -30,6 +30,7 @@ export function renderBars(layer, binned, options) {
         ipRowHeights,
         ipPairCounts,
         ipPositions,
+        stableIpPairOrderByRow,
         formatBytes,
         formatTimestamp,
         d3
@@ -51,30 +52,32 @@ export function renderBars(layer, binned, options) {
         globalFlagTotals.set(ft, (globalFlagTotals.get(ft) || 0) + c);
     }
 
-    // Collect unique IP pairs per row (yPos) with earliest timestamp for ordering
-    const ipPairsByRow = new Map(); // yPos -> Map(ipPairKey -> earliestTimestamp)
-    for (const d of items) {
-        const ipPairKey = makeIpPairKey(d.src_ip, d.dst_ip);
-        if (!ipPairsByRow.has(d.yPos)) {
-            ipPairsByRow.set(d.yPos, new Map());
+    // Use stable pair ordering if provided (prevents row jumping on zoom),
+    // otherwise fall back to computing from visible data
+    let ipPairOrderByRow = stableIpPairOrderByRow;
+    if (!ipPairOrderByRow || ipPairOrderByRow.size === 0) {
+        // Fallback: compute from visible data
+        const ipPairsByRow = new Map();
+        for (const d of items) {
+            const ipPairKey = makeIpPairKey(d.src_ip, d.dst_ip);
+            if (!ipPairsByRow.has(d.yPos)) {
+                ipPairsByRow.set(d.yPos, new Map());
+            }
+            const pairMap = ipPairsByRow.get(d.yPos);
+            const timestamp = d.binCenter || d.binTimestamp || d.timestamp || Infinity;
+            if (!pairMap.has(ipPairKey) || timestamp < pairMap.get(ipPairKey)) {
+                pairMap.set(ipPairKey, timestamp);
+            }
         }
-        const pairMap = ipPairsByRow.get(d.yPos);
-        const timestamp = d.binCenter || d.binTimestamp || d.timestamp || Infinity;
-        if (!pairMap.has(ipPairKey) || timestamp < pairMap.get(ipPairKey)) {
-            pairMap.set(ipPairKey, timestamp);
+        ipPairOrderByRow = new Map();
+        for (const [yPos, pairTimestamps] of ipPairsByRow) {
+            const orderedPairs = Array.from(pairTimestamps.entries())
+                .sort((a, b) => a[1] - b[1])
+                .map(([pair]) => pair);
+            const orderMap = new Map();
+            orderedPairs.forEach((pair, idx) => orderMap.set(pair, idx));
+            ipPairOrderByRow.set(yPos, { order: orderMap, count: orderedPairs.length });
         }
-    }
-
-    // Create ordered list of IP pairs per row, sorted by earliest timestamp
-    const ipPairOrderByRow = new Map(); // yPos -> Map(ipPairKey -> index)
-    for (const [yPos, pairTimestamps] of ipPairsByRow) {
-        // Sort pairs by their earliest timestamp
-        const orderedPairs = Array.from(pairTimestamps.entries())
-            .sort((a, b) => a[1] - b[1])
-            .map(([pair]) => pair);
-        const orderMap = new Map();
-        orderedPairs.forEach((pair, idx) => orderMap.set(pair, idx));
-        ipPairOrderByRow.set(yPos, { order: orderMap, count: orderedPairs.length });
     }
 
     // Group by position AND IP pair for stacking, but don't combine same flag types

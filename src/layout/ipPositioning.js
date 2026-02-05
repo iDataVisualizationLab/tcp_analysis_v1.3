@@ -18,6 +18,31 @@ export function computeIPCounts(packets) {
 }
 
 /**
+ * Compute the timestamp of the first packet for each IP.
+ * @param {Array} packets - Array of packet objects with src_ip, dst_ip, and timestamp
+ * @returns {Map<string, number>} Map of IP -> earliest timestamp
+ */
+export function computeIPFirstPacketTime(packets) {
+    const ipFirstTime = new Map();
+    packets.forEach(p => {
+        const ts = p.timestamp || p.time || 0;
+        if (p.src_ip) {
+            const current = ipFirstTime.get(p.src_ip);
+            if (current === undefined || ts < current) {
+                ipFirstTime.set(p.src_ip, ts);
+            }
+        }
+        if (p.dst_ip) {
+            const current = ipFirstTime.get(p.dst_ip);
+            if (current === undefined || ts < current) {
+                ipFirstTime.set(p.dst_ip, ts);
+            }
+        }
+    });
+    return ipFirstTime;
+}
+
+/**
  * Count unique IP pairs per source IP (for row height calculation).
  * @param {Array} packets - Array of packet objects with src_ip and dst_ip
  * @returns {Map<string, number>} Map of IP -> count of unique destination IPs
@@ -45,6 +70,56 @@ export function computeIPPairCounts(packets) {
 }
 
 /**
+ * Create canonical IP pair key (alphabetically ordered).
+ * @param {string} srcIp - Source IP
+ * @param {string} dstIp - Destination IP
+ * @returns {string} Canonical IP pair key
+ */
+function makeIpPairKey(srcIp, dstIp) {
+    if (!srcIp || !dstIp) return 'unknown';
+    return srcIp < dstIp ? `${srcIp}<->${dstIp}` : `${dstIp}<->${srcIp}`;
+}
+
+/**
+ * Compute stable IP pair ordering per row from ALL packets.
+ * This ordering stays fixed across zoom levels so rows don't jump.
+ *
+ * @param {Array} packets - Array of ALL packet objects
+ * @param {Map<string, number>} ipPositions - Map of IP -> y position
+ * @returns {Map<number, {order: Map<string, number>, count: number}>} yPos -> pair ordering
+ */
+export function computeIPPairOrderByRow(packets, ipPositions) {
+    const ipPairsByRow = new Map(); // yPos -> Map(ipPairKey -> earliestTimestamp)
+
+    for (const p of packets) {
+        if (!p.src_ip || !p.dst_ip) continue;
+        const yPos = ipPositions.get(p.src_ip);
+        if (yPos === undefined) continue;
+        const ipPairKey = makeIpPairKey(p.src_ip, p.dst_ip);
+        if (!ipPairsByRow.has(yPos)) {
+            ipPairsByRow.set(yPos, new Map());
+        }
+        const pairMap = ipPairsByRow.get(yPos);
+        const timestamp = p.bin_start || p.timestamp || p.time || Infinity;
+        if (!pairMap.has(ipPairKey) || timestamp < pairMap.get(ipPairKey)) {
+            pairMap.set(ipPairKey, timestamp);
+        }
+    }
+
+    const ipPairOrderByRow = new Map();
+    for (const [yPos, pairTimestamps] of ipPairsByRow) {
+        const orderedPairs = Array.from(pairTimestamps.entries())
+            .sort((a, b) => a[1] - b[1])
+            .map(([pair]) => pair);
+        const orderMap = new Map();
+        orderedPairs.forEach((pair, idx) => orderMap.set(pair, idx));
+        ipPairOrderByRow.set(yPos, { order: orderMap, count: orderedPairs.length });
+    }
+
+    return ipPairOrderByRow;
+}
+
+/**
  * Compute IP ordering and vertical positions for TimeArcs visualization.
  * Each row's height is dynamic based on how many unique destination IPs that source IP has.
  *
@@ -55,7 +130,7 @@ export function computeIPPairCounts(packets) {
  * @param {number} [options.topPad=TOP_PAD] - Top padding for first row
  * @param {Array<string>} [options.timearcsOrder] - Optional TimeArcs IP order to use
  * @param {number} [options.dotRadius=40] - Dot radius for height calculation
- * @returns {Object} { ipOrder, ipPositions, ipRowHeights, yDomain, height, ipCounts, ipPairCounts }
+ * @returns {Object} { ipOrder, ipPositions, ipRowHeights, ipPairOrderByRow, yDomain, height, ipCounts, ipPairCounts, ipFirstTime }
  */
 export function computeIPPositioning(packets, options = {}) {
     const {
@@ -63,12 +138,16 @@ export function computeIPPositioning(packets, options = {}) {
         rowGap = ROW_GAP,
         topPad = TOP_PAD,
         timearcsOrder = null,
-        dotRadius = 40
+        dotRadius = 40,
+        collapsedIPs = null
     } = options;
 
     // Count packets per IP
     const ipCounts = computeIPCounts(packets);
     const ipList = Array.from(new Set(Array.from(ipCounts.keys())));
+
+    // Compute first packet time for each IP (for sorting)
+    const ipFirstTime = computeIPFirstPacketTime(packets);
 
     // Count IP pairs per source IP for dynamic row heights
     const ipPairCounts = computeIPPairCounts(packets);
@@ -85,6 +164,15 @@ export function computeIPPositioning(packets, options = {}) {
         ipRowHeights.set(ip, height);
     });
 
+    // Override row heights for collapsed IPs (single-row height)
+    if (collapsedIPs && collapsedIPs.size > 0) {
+        for (const ip of collapsedIPs) {
+            if (ipRowHeights.has(ip)) {
+                ipRowHeights.set(ip, rowGap);
+            }
+        }
+    }
+
     // Initialize result containers
     let ipOrder = [];
     const ipPositions = new Map();
@@ -93,15 +181,24 @@ export function computeIPPositioning(packets, options = {}) {
     const effectiveTimearcsOrder = timearcsOrder || (state?.timearcs?.ipOrder);
 
     if (effectiveTimearcsOrder && effectiveTimearcsOrder.length > 0) {
-        // Use TimeArcs vertical order - filter to only IPs present in data
+        // Use TimeArcs IPs but re-sort by actual first packet time at current resolution
+        // (TimeArcs uses minute resolution, but packet data may have finer timestamps)
         const ipSet = new Set(ipList);
-        ipOrder = effectiveTimearcsOrder.filter(ip => ipSet.has(ip));
+        const timearcsIPs = effectiveTimearcsOrder.filter(ip => ipSet.has(ip));
 
-        // Add any IPs in data but not in TimeArcs order at the end
+        // Add any IPs in data but not in TimeArcs order
         ipList.forEach(ip => {
             if (!effectiveTimearcsOrder.includes(ip)) {
-                ipOrder.push(ip);
+                timearcsIPs.push(ip);
             }
+        });
+
+        // Re-sort by actual first packet time from packet data
+        ipOrder = timearcsIPs.slice().sort((a, b) => {
+            const ta = ipFirstTime.get(a) || Infinity;
+            const tb = ipFirstTime.get(b) || Infinity;
+            if (ta !== tb) return ta - tb;  // Earliest first
+            return a.localeCompare(b);
         });
 
         // Assign vertical positions with per-IP row heights
@@ -113,11 +210,11 @@ export function computeIPPositioning(packets, options = {}) {
     } else if (!state?.layout?.ipOrder?.length ||
                !state?.layout?.ipPositions?.size ||
                state?.layout?.ipOrder?.length !== ipList.length) {
-        // No TimeArcs order and force layout hasn't run - use simple sort by count
+        // No TimeArcs order and force layout hasn't run - sort by first packet time
         const sortedIPs = ipList.slice().sort((a, b) => {
-            const ca = ipCounts.get(a) || 0;
-            const cb = ipCounts.get(b) || 0;
-            if (cb !== ca) return cb - ca;
+            const ta = ipFirstTime.get(a) || Infinity;
+            const tb = ipFirstTime.get(b) || Infinity;
+            if (ta !== tb) return ta - tb;  // Earliest first
             return a.localeCompare(b);
         });
 
@@ -150,17 +247,36 @@ export function computeIPPositioning(packets, options = {}) {
     // Compute height
     const height = Math.max(500, (maxY ?? 0) + lastRowHeight + dotRadius + topPad);
 
+    // Compute stable IP pair ordering per row (used during zoom to prevent row jumping)
+    const ipPairOrderByRow = computeIPPairOrderByRow(packets, ipPositions);
+
+    // Override pair ordering for collapsed IPs: all pairs → index 0, count 1
+    if (collapsedIPs && collapsedIPs.size > 0) {
+        for (const ip of collapsedIPs) {
+            const yPos = ipPositions.get(ip);
+            if (yPos === undefined) continue;
+            const pairInfo = ipPairOrderByRow.get(yPos);
+            if (pairInfo) {
+                const collapsedOrder = new Map();
+                for (const key of pairInfo.order.keys()) collapsedOrder.set(key, 0);
+                ipPairOrderByRow.set(yPos, { order: collapsedOrder, count: 1 });
+            }
+        }
+    }
+
     return {
         ipOrder,
         ipPositions,
         ipRowHeights,
+        ipPairOrderByRow,
         yDomain,
         yRange,
         minY,
         maxY,
         height,
         ipCounts,
-        ipPairCounts
+        ipPairCounts,
+        ipFirstTime
     };
 }
 
@@ -170,7 +286,7 @@ export function computeIPPositioning(packets, options = {}) {
  * @param {Object} positioning - Result from computeIPPositioning
  */
 export function applyIPPositioningToState(state, positioning) {
-    const { ipOrder, ipPositions, ipRowHeights, ipPairCounts } = positioning;
+    const { ipOrder, ipPositions, ipRowHeights, ipPairCounts, ipPairOrderByRow } = positioning;
 
     state.layout.ipOrder = ipOrder;
     state.layout.ipPositions.clear();
@@ -181,4 +297,6 @@ export function applyIPPositioningToState(state, positioning) {
     // Store per-IP row heights and pair counts for rendering
     state.layout.ipRowHeights = ipRowHeights || new Map();
     state.layout.ipPairCounts = ipPairCounts || new Map();
+    // Store stable IP pair ordering (prevents row jumping on zoom)
+    state.layout.ipPairOrderByRow = ipPairOrderByRow || new Map();
 }
