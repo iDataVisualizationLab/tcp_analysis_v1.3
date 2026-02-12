@@ -103,7 +103,8 @@ export function renderCircles(layer, binned, options) {
     // Ensure each item has yPos and calculate offset
     const processed = items.map((d, idx) => {
         const yPos = d.yPos !== undefined ? d.yPos : findIPPosition(d.src_ip, d.src_ip, d.dst_ip, pairs, ipPositions);
-        const ipPairKey = makeIpPairKey(d.src_ip, d.dst_ip);
+        // Preserve '__collapsed__' sentinel from collapseSubRowsBins so highlighting works
+        const ipPairKey = d.ipPairKey === '__collapsed__' ? '__collapsed__' : makeIpPairKey(d.src_ip, d.dst_ip);
         const pairInfo = ipPairOrderByRow.get(yPos) || { order: new Map(), count: 1 };
         const pairIndex = pairInfo.order.get(ipPairKey) || 0;
         const pairCount = pairInfo.count;

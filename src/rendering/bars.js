@@ -87,7 +87,8 @@ export function renderBars(layer, binned, options) {
             (Number.isFinite(d.binTimestamp) ? Math.floor(d.binTimestamp) : Math.floor(d.timestamp));
         const ft = d.flagType || classifyFlags(d.flags);
         const count = Math.max(1, d.count || 1);
-        const ipPairKey = makeIpPairKey(d.src_ip, d.dst_ip);
+        // Preserve '__collapsed__' sentinel from collapseSubRowsBins so highlighting works
+        const ipPairKey = d.ipPairKey === '__collapsed__' ? '__collapsed__' : makeIpPairKey(d.src_ip, d.dst_ip);
         // Group by position AND IP pair for stacking different flag types
         const key = `${t}|${d.yPos}|${ipPairKey}`;
         let s = stacks.get(key);

@@ -15,6 +15,7 @@ import { computeIpSpans, createSpanData, renderRowLines, renderIpLabels, createL
 import { createArcHoverHandler, createArcMoveHandler, createArcLeaveHandler, attachArcHandlers } from './src/rendering/arcInteractions.js';
 import { loadAllMappings } from './src/mappings/loaders.js';
 import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from './src/interaction/resize.js';
+import { ForceNetworkLayout } from './src/layout/force_network.js';
 
 // Network TimeArcs visualization
 // Input CSV schema: timestamp,length,src_ip,dst_ip,protocol,count
@@ -191,6 +192,12 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
   // User-selected labeling mode: 'timearcs' or 'force_layout'
   let labelMode = 'timearcs';
+
+  // Force layout mode state
+  let layoutMode = 'timearcs'; // 'timearcs' | 'force_layout'
+  let forceLayout = null;      // ForceNetworkLayout instance (null when in timearcs mode)
+  let forceLayoutLayer = null;  // <g> for force layout rendering
+  let layoutTransitionInProgress = false; // Guard against rapid switching
   
   // Brush selection state
   // Brush is always available - user can click and drag anywhere to select
@@ -235,11 +242,18 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   // Store loaded file info for smart detection
   let loadedFileInfo = [];
   labelModeRadios.forEach(r => r.addEventListener('change', () => {
-    const sel = Array.from(labelModeRadios).find(r=>r.checked);
-    labelMode = sel ? sel.value : 'timearcs';
-    // Only update colors and legend, don't recompute layout
-    if (cachedOriginalLinks && currentArcPaths) {
-      updateLabelMode();
+    const sel = Array.from(labelModeRadios).find(r => r.checked);
+    const newMode = sel ? sel.value : 'timearcs';
+    if (newMode === layoutMode || layoutTransitionInProgress) return;
+
+    const prev = layoutMode;
+    layoutMode = newMode;
+    labelMode = newMode; // preserve backward compat for colorForAttack
+
+    if (prev === 'timearcs' && newMode === 'force_layout') {
+      transitionToForceLayout();
+    } else if (prev === 'force_layout' && newMode === 'timearcs') {
+      transitionToTimearcs();
     }
   }));
 
@@ -354,7 +368,10 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   if (clearBrushBtn) {
     clearBrushBtn.addEventListener('click', () => {
       console.log('Clearing brush selection');
-      if (typeof clearBrushSelectionFn === 'function') {
+      if (layoutMode === 'force_layout') {
+        // In force layout mode, clear time filter (show all data)
+        if (forceLayout) forceLayout.updateTimeFilter(null);
+      } else if (typeof clearBrushSelectionFn === 'function') {
         clearBrushSelectionFn();
       }
     });
@@ -427,6 +444,18 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   // Cleanup function for resize handler
   let resizeCleanup = null;
 
+  // Module-level references set during render() for force layout transitions
+  let _renderLinksWithNodes = null;  // linksWithNodes from last render
+  let _renderAllIps = null;          // allIps from last render
+  let _renderIpToComponent = null;   // ipToComponent from last render
+  let _renderComponents = null;      // components from last render
+  let _renderYScaleLens = null;      // yScaleLens from last render
+  let _renderXScaleLens = null;      // xScaleLens from last render (for split transition)
+  let _renderXStart = null;          // xStart from last render
+  let _renderColorForAttack = null;  // colorForAttack from last render
+  let _renderTsMin = null;           // tsMin from last render
+  let _renderTsMax = null;           // tsMax from last render
+
   // Initialize mappings, then try a default CSV load
   (async function init() {
     try {
@@ -482,6 +511,16 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
         }
 
         console.log(`Resize: ${oldWidth}x${oldHeight} -> ${newWidth}x${height}`);
+
+        // In force layout mode, update dimensions and re-render
+        if (layoutMode === 'force_layout' && forceLayout) {
+          forceLayout.width = newWidth + MARGIN.left + MARGIN.right;
+          forceLayout.height = height;
+          if (forceLayoutLayer) {
+            forceLayout.render(forceLayoutLayer);
+          }
+          return;
+        }
 
         // Re-render with current filter state (filtered or unfiltered)
         // applyAttackFilter will render originalData if all attacks visible,
@@ -940,7 +979,6 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
     // Helper to get color for current label mode
     const colorForAttack = (name) => {
-      if (labelMode === 'force_layout') return _lookupAttackGroupColor(name) || _lookupAttackColor(name) || DEFAULT_COLOR;
       return _lookupAttackColor(name) || _lookupAttackGroupColor(name) || DEFAULT_COLOR;
     };
 
@@ -970,6 +1008,12 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
   // Function to filter data based on visible attacks and re-render
   // Also used by resize handler to re-render current view (filtered or unfiltered)
   async function applyAttackFilter() {
+    // In force layout mode, delegate to the force layout instance
+    if (layoutMode === 'force_layout' && forceLayout) {
+      forceLayout.updateVisibleAttacks(visibleAttacks);
+      return;
+    }
+
     if (!originalData || originalData.length === 0) return;
 
     const activeLabelKey = labelMode === 'force_layout' ? 'attack_group' : 'attack';
@@ -997,6 +1041,245 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     await render(filteredData);
     // Reset flag after render completes
     isRenderingFilteredData = false;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Force-directed network layout transitions
+  // ═══════════════════════════════════════════════════════════
+
+  async function transitionToForceLayout() {
+    if (!_renderLinksWithNodes || _renderLinksWithNodes.length === 0) {
+      console.warn('No data available for force layout');
+      layoutMode = 'timearcs';
+      labelMode = 'timearcs';
+      document.getElementById('labelModeTimearcs').checked = true;
+      return;
+    }
+
+    layoutTransitionInProgress = true;
+    setStatus(statusEl, 'Computing force layout...');
+
+    const activeLabelKey = 'attack_group';
+
+    // Use same color priority as timearcs for consistency
+    const colorForAttack = (name) => {
+      return _lookupAttackColor(name) || _lookupAttackGroupColor(name) || DEFAULT_COLOR;
+    };
+
+    // Build initial positions (center X, timearcs Y) for force simulation seed
+    const drawWidth = width - MARGIN.left - MARGIN.right;
+    const centerX = MARGIN.left + drawWidth / 2;
+    const initialPositions = new Map();
+    for (const ip of _renderAllIps) {
+      const yPos = _renderYScaleLens ? _renderYScaleLens(ip) : MARGIN.top + 50;
+      initialPositions.set(ip, { x: centerX, y: yPos });
+    }
+
+    // Create force layout and pre-calculate final positions (run simulation to completion)
+    forceLayout = new ForceNetworkLayout({
+      d3, svg, width, height, margin: MARGIN,
+      colorForAttack, tooltip, showTooltip, hideTooltip
+    });
+    forceLayout.setData(
+      _renderLinksWithNodes, _renderAllIps,
+      _renderIpToComponent, _renderComponents, activeLabelKey
+    );
+    forceLayout.aggregateForTimeRange(null);
+
+    // rawPositions: pass to render() so autoFit reproduces the same visual layout
+    // visualPositions: where nodes will appear on screen (arc merge targets)
+    const { rawPositions, visualPositions } = forceLayout.precalculate(initialPositions);
+
+    setStatus(statusEl, 'Animating to force layout...');
+
+    // --- Phase 1: Animate arcs to precalculated force node positions ---
+
+    svg.selectAll('path.arc').style('pointer-events', 'none');
+
+    function mergeArcTween(d, targetSrcPos, targetTgtPos) {
+      const sx0 = d.source.x, sy0 = d.source.y;
+      const tx0 = d.target.x, ty0 = d.target.y;
+      return function(t) {
+        const sx = sx0 + (targetSrcPos.x - sx0) * t;
+        const sy = sy0 + (targetSrcPos.y - sy0) * t;
+        const tx = tx0 + (targetTgtPos.x - tx0) * t;
+        const ty = ty0 + (targetTgtPos.y - ty0) * t;
+        const dx = tx - sx, dy = ty - sy;
+        const dr = Math.sqrt(dx * dx + dy * dy) / 2 * (1 - t);
+        if (dr < 1) return `M${sx},${sy} L${tx},${ty}`;
+        return sy < ty
+          ? `M${sx},${sy} A${dr},${dr} 0 0,1 ${tx},${ty}`
+          : `M${tx},${ty} A${dr},${dr} 0 0,1 ${sx},${sy}`;
+      };
+    }
+
+    const arcMergeTransition = svg.selectAll('path.arc')
+      .transition().duration(800)
+      .attrTween('d', function(d) {
+        const srcIp = d.sourceNode.name;
+        const tgtIp = d.targetNode.name;
+        const srcPos = visualPositions.get(srcIp) || { x: centerX, y: MARGIN.top + 50 };
+        const tgtPos = visualPositions.get(tgtIp) || { x: centerX, y: MARGIN.top + 100 };
+        return mergeArcTween(d, srcPos, tgtPos);
+      })
+      .style('opacity', 0.3);
+
+    // Fade out row lines, ip labels, component toggles simultaneously
+    svg.selectAll('.row-line, .ip-label, defs linearGradient')
+      .style('pointer-events', 'none')
+      .transition().duration(800)
+      .style('opacity', 0);
+    svg.selectAll('.component-toggle')
+      .style('pointer-events', 'none')
+      .transition().duration(800)
+      .style('opacity', 0);
+
+    await arcMergeTransition.end().catch(() => {});
+
+    // --- Phase 2: Show pre-positioned force layout (no live simulation animation) ---
+
+    svg.selectAll('path.arc').style('display', 'none');
+
+    forceLayoutLayer = svg.append('g').attr('class', 'force-layout-layer');
+    forceLayout.render(forceLayoutLayer, rawPositions, { staticStart: true });
+
+    // Rebuild legend for attack_group mode
+    const attacks = Array.from(new Set(
+      _renderLinksWithNodes.map(l => l[activeLabelKey] || 'normal')
+    )).sort();
+    visibleAttacks = new Set(attacks);
+    currentLabelMode = labelMode;
+    buildLegend(attacks, colorForAttack);
+
+    // Hide compression slider (magnification not applicable in force mode)
+    if (compressionSlider) compressionSlider.closest('div').style.display = 'none';
+
+    layoutTransitionInProgress = false;
+    setStatus(statusEl, `Force layout: ${_renderAllIps.length} IPs • ${attacks.length} attack groups`);
+  }
+
+  async function transitionToTimearcs() {
+    layoutTransitionInProgress = true;
+    setStatus(statusEl, 'Animating to TimeArcs...');
+
+    // --- Phase 1: Position arcs at force node positions ---
+
+    // Get current visual force node positions (accounting for autoFit transform)
+    const forcePositions = forceLayout ? forceLayout.getVisualNodePositions() : new Map();
+
+    // Make arcs visible again, positioned as straight lines at force positions
+    svg.selectAll('path.arc')
+      .style('display', null)
+      .style('pointer-events', 'none')
+      .style('opacity', 0.3)
+      .attr('d', function(d) {
+        const srcIp = d.sourceNode.name;
+        const tgtIp = d.targetNode.name;
+        const srcPos = forcePositions.get(srcIp) || { x: MARGIN.left, y: MARGIN.top + 50 };
+        const tgtPos = forcePositions.get(tgtIp) || { x: MARGIN.left, y: MARGIN.top + 100 };
+        // Straight line at force positions (all same-pair arcs overlap)
+        return `M${srcPos.x},${srcPos.y} L${tgtPos.x},${tgtPos.y}`;
+      });
+
+    // Fade out force layout layer
+    if (forceLayoutLayer) {
+      forceLayoutLayer
+        .transition().duration(600)
+        .style('opacity', 0)
+        .on('end', function () {
+          d3.select(this).remove();
+        });
+    }
+
+    // Fade in row lines, ip labels, component toggles
+    svg.selectAll('.row-line')
+      .transition().duration(800)
+      .style('opacity', 1)
+      .on('end', function () { d3.select(this).style('opacity', null).style('pointer-events', null); });
+    svg.selectAll('.ip-label')
+      .transition().duration(800)
+      .style('opacity', 1)
+      .on('end', function () { d3.select(this).style('opacity', null).style('pointer-events', null); });
+    svg.selectAll('.component-toggle')
+      .transition().duration(800)
+      .style('opacity', 1)
+      .on('end', function () { d3.select(this).style('pointer-events', null); });
+
+    // --- Phase 2: Animate split — arcs fan out to timearc positions ---
+
+    // Custom split interpolator: straight line at force positions → curved arc at timearc position
+    function splitArcTween(d, startSrcPos, startTgtPos, endArcX, endSrcY, endTgtY) {
+      return function(t) {
+        const sx = startSrcPos.x + (endArcX - startSrcPos.x) * t;
+        const sy = startSrcPos.y + (endSrcY - startSrcPos.y) * t;
+        const tx = startTgtPos.x + (endArcX - startTgtPos.x) * t;
+        const ty = startTgtPos.y + (endTgtY - startTgtPos.y) * t;
+        const dx = tx - sx, dy = ty - sy;
+        const dr = Math.sqrt(dx * dx + dy * dy) / 2 * t;
+        if (dr < 1) return `M${sx},${sy} L${tx},${ty}`;
+        return sy < ty
+          ? `M${sx},${sy} A${dr},${dr} 0 0,1 ${tx},${ty}`
+          : `M${tx},${ty} A${dr},${dr} 0 0,1 ${sx},${sy}`;
+      };
+    }
+
+    const arcSplitTransition = svg.selectAll('path.arc')
+      .transition().duration(800)
+      .attrTween('d', function(d) {
+        const srcIp = d.sourceNode.name;
+        const tgtIp = d.targetNode.name;
+        const srcPos = forcePositions.get(srcIp) || { x: MARGIN.left, y: MARGIN.top + 50 };
+        const tgtPos = forcePositions.get(tgtIp) || { x: MARGIN.left, y: MARGIN.top + 100 };
+        // Target positions: each arc fans to its own time position
+        const arcX = _renderXScaleLens ? _renderXScaleLens(d.minute) : MARGIN.left;
+        const srcY = _renderYScaleLens ? _renderYScaleLens(srcIp) : MARGIN.top + 50;
+        const tgtY = _renderYScaleLens ? _renderYScaleLens(tgtIp) : MARGIN.top + 100;
+        return splitArcTween(d, srcPos, tgtPos, arcX, srcY, tgtY);
+      })
+      .style('opacity', 1);
+
+    // Wait for split animation to complete
+    await arcSplitTransition.end().catch(() => {});
+
+    // --- Phase 3: Cleanup ---
+
+    // Destroy force layout instance
+    if (forceLayout) {
+      forceLayout.destroy();
+      forceLayout = null;
+    }
+    forceLayoutLayer = null;
+
+    // Restore arc pointer-events and clear inline opacity
+    svg.selectAll('path.arc')
+      .style('pointer-events', null)
+      .style('opacity', null);
+
+    // Show compression slider
+    if (compressionSlider) compressionSlider.closest('div').style.display = '';
+
+    // Refresh timearcs positions to match current bifocal state
+    if (updateBifocalVisualizationFn) {
+      updateBifocalVisualizationFn();
+    }
+
+    // Rebuild legend for timearcs mode
+    if (cachedOriginalLinks) {
+      const activeLabelKey = 'attack';
+      const attacks = Array.from(new Set(
+        cachedOriginalLinks.map(l => l[activeLabelKey] || 'normal')
+      )).sort();
+      visibleAttacks = new Set(attacks);
+      currentLabelMode = labelMode;
+
+      const colorForAttack = (name) => {
+        return _lookupAttackColor(name) || _lookupAttackGroupColor(name) || DEFAULT_COLOR;
+      };
+      buildLegend(attacks, colorForAttack);
+    }
+
+    layoutTransitionInProgress = false;
+    setStatus(statusEl, 'TimeArcs view restored');
   }
 
   function buildLegend(items, colorFn) {
@@ -1267,7 +1550,6 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     const lengthScale = d3.scaleLinear().domain([0, Math.max(1, maxLen)]).range([0.6, 2.2]);
 
     const colorForAttack = (name) => {
-      if (labelMode === 'force_layout') return _lookupAttackGroupColor(name) || _lookupAttackColor(name) || DEFAULT_COLOR;
       return _lookupAttackColor(name) || _lookupAttackGroupColor(name) || DEFAULT_COLOR;
     };
 
@@ -1584,6 +1866,8 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       // Add drag detection handlers to SVG for drag-to-brush
       // This allows hover to work normally, but click+drag starts brush selection
       svg.on('mousedown.dragbrush', function(event) {
+        // In force layout mode, skip if clicking on force nodes (let d3.drag handle those)
+        if (layoutMode === 'force_layout' && event.target.closest('.force-node')) return;
         // Ignore if clicking on persistent selection elements
         if (event.target.closest('.persistent-selection')) return;
         // Ignore if clicking on brush handles (for resizing existing selection)
@@ -1675,7 +1959,58 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     const finalizeBrushSelection = (x0, y0, x1, y1) => {
       console.log('Finalizing brush selection:', { x0, y0, x1, y1 });
 
-      // Find arcs within brush selection
+      // Force layout mode: select nodes within brush rectangle
+      if (layoutMode === 'force_layout' && forceLayout) {
+        const nodePositions = forceLayout.getVisualNodePositions();
+        selectedArcs = [];
+        selectedIps.clear();
+
+        for (const [ip, pos] of nodePositions) {
+          if (pos.x >= x0 && pos.x <= x1 && pos.y >= y0 && pos.y <= y1) {
+            selectedIps.add(ip);
+          }
+        }
+
+        if (selectedIps.size > 0) {
+          // Collect arcs between selected IPs and compute time range from them
+          let minTime = Infinity, maxTime = -Infinity;
+          linksWithNodes.forEach(link => {
+            if (selectedIps.has(link.sourceNode.name) && selectedIps.has(link.targetNode.name)) {
+              selectedArcs.push(link);
+              if (link.minute < minTime) minTime = link.minute;
+              if (link.minute > maxTime) maxTime = link.minute;
+            }
+          });
+
+          if (minTime === maxTime) {
+            selectionTimeRange = { min: minTime, max: minTime + 1 };
+          } else {
+            selectionTimeRange = { min: minTime, max: maxTime + 1 };
+          }
+
+          const selectionId = ++selectionIdCounter;
+          const persistedSelection = {
+            id: selectionId,
+            timeBounds: { minTime, maxTime, minY: y0, maxY: y1 },
+            pixelBounds: { x0, y0, x1, y1 },
+            arcs: [...selectedArcs],
+            ips: new Set(selectedIps),
+            timeRange: { ...selectionTimeRange }
+          };
+          persistentSelections.push(persistedSelection);
+
+          createPersistentSelectionVisual(persistedSelection);
+          updateSelectionDisplay();
+          updateBrushStatus(`${persistentSelections.length} selection${persistentSelections.length > 1 ? 's' : ''} saved`, false);
+        } else {
+          selectionTimeRange = null;
+          updateBrushStatus('No nodes selected', false);
+          setTimeout(() => updateBrushStatus('Drag to select', false), 1500);
+        }
+        return;
+      }
+
+      // Timearcs mode: find arcs within brush selection
       selectedArcs = [];
       selectedIps.clear();
       let minTime = Infinity;
@@ -1758,14 +2093,20 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
     const createPersistentSelectionVisual = (selection) => {
       if (!multiSelectionsGroup) return;
 
-      const { id, timeBounds, arcs, ips } = selection;
-      const { minTime, maxTime, minY, maxY } = timeBounds;
+      const { id, timeBounds, arcs, ips, pixelBounds } = selection;
 
-      // Convert time bounds to current pixel positions using xScaleLens
-      const x0 = xScaleLens(minTime);
-      const x1 = xScaleLens(maxTime);
-      const y0 = minY;
-      const y1 = maxY;
+      let x0, x1, y0, y1;
+      if (pixelBounds) {
+        // Force layout: use stored pixel bounds directly
+        ({ x0, y0, x1, y1 } = pixelBounds);
+      } else {
+        // Timearcs: convert time bounds to pixel positions
+        const { minTime, maxTime, minY, maxY } = timeBounds;
+        x0 = xScaleLens(minTime);
+        x1 = xScaleLens(maxTime);
+        y0 = minY;
+        y1 = maxY;
+      }
 
       // Create a group for this selection
       const selGroup = multiSelectionsGroup.append('g')
@@ -1886,14 +2227,18 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
       if (!multiSelectionsGroup) return;
 
       persistentSelections.forEach(selection => {
-        const { id, timeBounds, arcs, ips } = selection;
-        const { minTime, maxTime, minY, maxY } = timeBounds;
+        const { id, timeBounds, pixelBounds } = selection;
 
-        // Recompute pixel positions using current xScaleLens
-        const x0 = xScaleLens(minTime);
-        const x1 = xScaleLens(maxTime);
-        const y0 = minY;
-        const y1 = maxY;
+        let x0, x1, y0, y1;
+        if (pixelBounds) {
+          ({ x0, y0, x1, y1 } = pixelBounds);
+        } else {
+          const { minTime, maxTime, minY, maxY } = timeBounds;
+          x0 = xScaleLens(minTime);
+          x1 = xScaleLens(maxTime);
+          y0 = minY;
+          y1 = maxY;
+        }
 
         const selGroup = multiSelectionsGroup.select(`.selection-${id}`);
         if (selGroup.empty()) return;
@@ -2960,6 +3305,23 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
     // Update visualization with current bifocal state
     function updateBifocalVisualization() {
+      // In force layout mode, use the focus region as a time-range filter
+      if (layoutMode === 'force_layout' && forceLayout) {
+        const fs = bifocalState.focusStart;
+        const fe = bifocalState.focusEnd;
+        // Full range → show everything
+        if (fs <= 0.01 && fe >= 0.99) {
+          forceLayout.updateTimeFilter(null);
+        } else {
+          const min = _renderTsMin + fs * (_renderTsMax - _renderTsMin);
+          const max = _renderTsMin + fe * (_renderTsMax - _renderTsMin);
+          forceLayout.updateTimeFilter({ min, max });
+        }
+        updateBifocalRegionText();
+        if (bifocalHandles) bifocalHandles.updateHandlePositions();
+        return;
+      }
+
       // During drag: immediate updates (no transitions) for responsiveness
       const dragging = bifocalHandles && bifocalHandles.isDragging;
       const dur = dragging ? 0 : 250;
@@ -3069,6 +3431,18 @@ import { setupWindowResizeHandler as setupWindowResizeHandlerFromModule } from '
 
     // Store reference to updateBifocalVisualization
     updateBifocalVisualizationFn = updateBifocalVisualization;
+
+    // Store module-level references for force layout transitions
+    _renderLinksWithNodes = linksWithNodes;
+    _renderAllIps = allIps;
+    _renderIpToComponent = ipToComponent;
+    _renderComponents = components;
+    _renderYScaleLens = yScaleLens;
+    _renderXScaleLens = xScaleLens;
+    _renderXStart = xStart;
+    _renderColorForAttack = colorForAttack;
+    _renderTsMin = tsMin;
+    _renderTsMax = tsMax;
 
     // Create bifocal drag handles in the sticky bifocal-bar SVG (not the scrollable chart SVG)
     const bifocalBarSvg = d3.select('#bifocal-bar');

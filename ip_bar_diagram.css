@@ -245,6 +245,19 @@ label {
     fill: #ffd43b !important;
 }
 
+/* Sub-row highlight styles for pair-specific connectivity */
+.sub-row-highlight {
+    pointer-events: all;
+    transition: opacity 0.15s ease-out;
+}
+.sub-row-highlight.active {
+    opacity: 0.15 !important;
+}
+.sub-row-highlight.self {
+    opacity: 0.25 !important;
+    fill: #ffd43b !important;
+}
+
 /* Node label styles for connectivity highlighting */
 .node-label {
     transition: opacity 0.15s ease-out, fill 0.15s ease-out;

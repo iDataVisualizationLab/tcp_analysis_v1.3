@@ -54,9 +54,10 @@ The `index.html` redirects to `attack_timearcs.html` by default.
 │  /src Modular System (ES6 modules)                       │
 │                                                          │
 │  rendering/   bars.js, circles.js, arcPath.js, rows.js   │
-│               arcInteractions.js, tooltip.js             │
+│               arcInteractions.js, highlightUtils.js      │
+│               tooltip.js                                 │
 │  scales/      scaleFactory.js, distortion.js (fisheye)   │
-│  layout/      forceSimulation.js                         │
+│  layout/      forceSimulation.js, force_network.js       │
 │  interaction/ zoom.js, dragReorder.js, resize.js         │
 │  data/        binning.js, csvParser.js, flowReconstruction.js
 │               resolution-manager.js, data-source.js      │
@@ -368,7 +369,16 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 ### Force-Directed Layout
 
 - **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints
+- **Force Network** (`src/layout/force_network.js`): 2D force layout used as alternate view mode in TimeArcs. Aggregates arc data by IP pair + attack type, renders with D3 force simulation. Supports `precalculate()` for pre-computing positions (used during animated transitions) and `staticStart` rendering
 - **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
+
+### Shared Highlight Logic
+
+`src/rendering/highlightUtils.js` provides shared hover highlight functions used by both timearcs (`arcInteractions.js`) and force layout (`force_network.js`):
+- `highlightHoveredLink()` / `unhighlightLinks()` — dim all links, highlight hovered
+- `getLinkHighlightInfo()` — compute active IPs and attack color from link datum (handles both timearcs arc shape and force link shape)
+- `highlightEndpointLabels()` / `unhighlightEndpointLabels()` — bold, enlarge, color active IP labels; dim others
+- `ipFromDatum()` (internal) — normalizes datum to IP string (timearcs labels bind raw strings, force layout nodes bind `{id, degree}` objects)
 
 ### Floating Control Panel
 
@@ -397,9 +407,9 @@ The fisheye lens effect (`src/plugins/d3-fisheye.js`, wrapped by `src/scales/dis
 ## Module Dependencies
 
 Main files import heavily from `/src`:
-- **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`
+- **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`, `highlightUtils.js`
 - **Data**: `binning.js`, `flowReconstruction.js`, `csvParser.js`, `aggregation.js`, `resolution-manager.js`, `data-source.js`, `component-loader.js`
-- **Layout**: `forceSimulation.js`
+- **Layout**: `forceSimulation.js`, `force_network.js`
 - **Interaction**: `zoom.js`, `arcInteractions.js`, `dragReorder.js`, `resize.js`
 - **Scales**: `scaleFactory.js`, `distortion.js`
 - **Ground Truth**: `groundTruth.js`

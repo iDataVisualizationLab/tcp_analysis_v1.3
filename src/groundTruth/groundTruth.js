@@ -61,13 +61,57 @@ export function filterGroundTruthByIPs(groundTruthData, selectedIPs) {
 }
 
 /**
+ * Compute box y and height for a ground truth overlay on one IP row,
+ * targeting only the sub-row that matches the event's IP pair.
+ *
+ * @param {string} ip - The IP address for this box
+ * @param {number} baseY - Base y position from ipPositions
+ * @param {string} pairKey - Canonical IP pair key (alphabetically sorted "A<->B")
+ * @param {Object} subRowLayout - {ipPairOrderByRow, ipRowHeights, rowGap}
+ * @returns {{y: number, height: number, pairIndex: number}}
+ */
+function computeSubRowBox(ip, baseY, pairKey, subRowLayout) {
+    const defaultHeight = 20;
+    const SUB_ROW_GAP = 2;
+
+    if (!subRowLayout) {
+        return { y: baseY - defaultHeight / 2, height: defaultHeight, pairIndex: -1 };
+    }
+
+    const { ipPairOrderByRow, ipRowHeights, rowGap } = subRowLayout;
+    const pairInfo = ipPairOrderByRow && ipPairOrderByRow.get(baseY);
+
+    if (!pairInfo || pairInfo.count <= 1) {
+        return { y: baseY - defaultHeight / 2, height: defaultHeight, pairIndex: -1 };
+    }
+
+    // Row is expanded — find the specific sub-row for this IP pair
+    const pairIndex = pairInfo.order.has(pairKey) ? pairInfo.order.get(pairKey) : 0;
+    const rh = (ipRowHeights && ipRowHeights.get(ip)) || rowGap || 30;
+    const availableHeight = Math.max(20, rh - 6);
+    const totalGaps = Math.max(0, pairInfo.count - 1) * SUB_ROW_GAP;
+    const subRowHeight = Math.max(4, (availableHeight - totalGaps) / pairInfo.count);
+    const centerY = baseY + pairIndex * (subRowHeight + SUB_ROW_GAP);
+
+    return { y: centerY - subRowHeight / 2, height: subRowHeight, pairIndex };
+}
+
+/**
+ * Create a canonical IP pair key (alphabetically sorted).
+ */
+function makePairKey(a, b) {
+    return a < b ? `${a}<->${b}` : `${b}<->${a}`;
+}
+
+/**
  * Prepare ground truth box data for visualization.
  * @param {Array} events - Filtered events
- * @param {Object} options - {xScale, findIPPosition, pairs, ipPositions, eventColors}
+ * @param {Object} options - {xScale, findIPPosition, pairs, ipPositions, eventColors, subRowLayout}
+ *   subRowLayout (optional): {ipPairOrderByRow, ipRowHeights, rowGap} for expanded sub-row support
  * @returns {Array} Box data for D3
  */
 export function prepareGroundTruthBoxData(events, options) {
-    const { xScale, findIPPosition, pairs, ipPositions, eventColors } = options;
+    const { xScale, findIPPosition, pairs, ipPositions, eventColors, subRowLayout } = options;
 
     const boxData = [];
 
@@ -83,33 +127,38 @@ export function prepareGroundTruthBoxData(events, options) {
         const startX = xScale(event.startTimeMicroseconds);
         const endX = xScale(adjustedStopMicroseconds);
         const width = Math.max(1, endX - startX);
-        const boxHeight = 20;
 
-        // Source box
+        const pairKey = makePairKey(event.source, event.destination);
+        const srcBox = computeSubRowBox(event.source, sourceY, pairKey, subRowLayout);
+        const dstBox = computeSubRowBox(event.destination, destY, pairKey, subRowLayout);
+
+        // Source box — positioned at the specific sub-row for this pair
         boxData.push({
             event,
             ip: event.source,
             x: startX,
-            y: sourceY - boxHeight / 2,
+            y: srcBox.y,
             width,
-            height: boxHeight,
+            height: srcBox.height,
             color: eventColors[event.eventType] || '#666',
             isSource: true,
+            pairIndex: srcBox.pairIndex,
             adjustedStartMicroseconds: event.startTimeMicroseconds,
             adjustedStopMicroseconds,
             wasExpanded: true
         });
 
-        // Destination box
+        // Destination box — positioned at the specific sub-row for this pair
         boxData.push({
             event,
             ip: event.destination,
             x: startX,
-            y: destY - boxHeight / 2,
+            y: dstBox.y,
             width,
-            height: boxHeight,
+            height: dstBox.height,
             color: eventColors[event.eventType] || '#666',
             isSource: false,
+            pairIndex: dstBox.pairIndex,
             adjustedStartMicroseconds: event.startTimeMicroseconds,
             adjustedStopMicroseconds,
             wasExpanded: true
