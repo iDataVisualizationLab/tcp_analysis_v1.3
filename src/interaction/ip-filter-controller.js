@@ -77,11 +77,29 @@ export function createIPFilterController(dependencies) {
             }
 
             // Filter packets by selected IPs
-            const { filtered } = filterPacketsByIPs({
+            let { filtered } = filterPacketsByIPs({
                 packets: state.data.full,
                 selectedIPs,
                 filterCache
             });
+
+            // If coming from TimeArcs selection, also filter by time range
+            // This ensures packets outside the selection window are excluded
+            console.log('[updateIPFilter] Checking time filter:', {
+                overviewTimeExtent: state.timearcs.overviewTimeExtent,
+                timeRange: state.timearcs.timeRange,
+                filteredCount: filtered.length
+            });
+            if (state.timearcs.overviewTimeExtent &&
+                state.timearcs.overviewTimeExtent[0] < state.timearcs.overviewTimeExtent[1]) {
+                const [timeMin, timeMax] = state.timearcs.overviewTimeExtent;
+                const beforeCount = filtered.length;
+                filtered = filtered.filter(p => p.timestamp >= timeMin && p.timestamp <= timeMax);
+                console.log(`[updateIPFilter] Time-filtered packets: ${beforeCount} → ${filtered.length} (TimeArcs range: ${((timeMax - timeMin) / 1_000_000).toFixed(1)}s)`);
+            } else {
+                console.warn('[updateIPFilter] NO time filtering - overviewTimeExtent not set or invalid');
+            }
+
             state.data.filtered = filtered;
             state.data.version++;
 
@@ -151,6 +169,17 @@ export function createIPFilterController(dependencies) {
             if (isFlowModeOnly) {
                 // Flow mode: overview chart handles visualization
                 console.log('[Visualization] Skipping packet visualization - in flow mode with no packet data');
+
+                // CRITICAL: In flow-only mode, state.data.timeExtent must be set from
+                // state.timearcs.overviewTimeExtent so zoom calculations use the correct base range.
+                // Without this, applyZoomDomain() uses the full dataset extent as the base,
+                // causing the zoom to be calculated incorrectly.
+                if (state.timearcs.overviewTimeExtent &&
+                    state.timearcs.overviewTimeExtent[0] < state.timearcs.overviewTimeExtent[1]) {
+                    state.data.timeExtent = state.timearcs.overviewTimeExtent.slice();
+                    console.log('[Flow Mode] Set state.data.timeExtent from TimeArcs selection:', state.data.timeExtent);
+                }
+
                 setTimeout(() => {
                     applyTimearcsTimeRangeZoom();
                 }, 150);

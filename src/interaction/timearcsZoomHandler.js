@@ -163,11 +163,24 @@ export function createTimeArcsZoomHandler(context) {
         // Normal zoom handling
         if (sourceEvent && sourceEvent.type === 'wheel' && sourceEvent.deltaX !== 0) {
             const panAmount = sourceEvent.deltaX * 0.5;
-            const currentDomain = xScale.domain();
+            let currentDomain = xScale.domain();
             const domainRange = currentDomain[1] - currentDomain[0];
             const panRatio = panAmount / width;
             const panOffset = domainRange * panRatio;
-            xScale.domain([currentDomain[0] - panOffset, currentDomain[1] - panOffset]);
+            let newDomain = [currentDomain[0] - panOffset, currentDomain[1] - panOffset];
+
+            // If TimeArcs selection active, constrain panning
+            if (state.timearcs.overviewTimeExtent &&
+                state.timearcs.overviewTimeExtent[0] < state.timearcs.overviewTimeExtent[1]) {
+                const [selMin, selMax] = state.timearcs.overviewTimeExtent;
+                if (newDomain[0] < selMin) {
+                    newDomain = [selMin, selMin + domainRange];
+                }
+                if (newDomain[1] > selMax) {
+                    newDomain = [selMax - domainRange, selMax];
+                }
+            }
+            xScale.domain(newDomain);
         } else {
             const newXScale = transform.rescaleX(
                 d3.scaleLinear().domain(timeExtent).range([0, width])
@@ -176,8 +189,28 @@ export function createTimeArcsZoomHandler(context) {
         }
 
         // Floor domain values
-        const currentDomain = xScale.domain();
-        xScale.domain([Math.floor(currentDomain[0]), Math.floor(currentDomain[1])]);
+        let currentDomain = xScale.domain();
+        currentDomain = [Math.floor(currentDomain[0]), Math.floor(currentDomain[1])];
+
+        // If TimeArcs selection is active, constrain panning to the selection range
+        // This prevents viewing data outside the user's selection
+        if (state.timearcs.overviewTimeExtent &&
+            state.timearcs.overviewTimeExtent[0] < state.timearcs.overviewTimeExtent[1]) {
+            const [selMin, selMax] = state.timearcs.overviewTimeExtent;
+            const domainWidth = currentDomain[1] - currentDomain[0];
+
+            // Clamp the domain to stay within selection bounds
+            if (currentDomain[0] < selMin) {
+                currentDomain[0] = selMin;
+                currentDomain[1] = Math.min(selMax, selMin + domainWidth);
+            }
+            if (currentDomain[1] > selMax) {
+                currentDomain[1] = selMax;
+                currentDomain[0] = Math.max(selMin, selMax - domainWidth);
+            }
+        }
+
+        xScale.domain(currentDomain);
 
         // Update intended zoom domain (preserves zoom state across operations)
         state.timearcs.intendedZoomDomain = xScale.domain().slice();

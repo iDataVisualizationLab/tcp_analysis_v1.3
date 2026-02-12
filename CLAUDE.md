@@ -41,6 +41,7 @@ The `index.html` redirects to `attack_timearcs.html` by default.
                            │
 ┌──────────────────────────┴──────────────────────────────┐
 │  Supporting Modules                                      │
+│  control-panel.js - Floating control panel (drag/collapse)│
 │  sidebar.js      - IP/flow selection UI                  │
 │  legends.js      - Legend rendering                      │
 │  overview_chart.js - Stacked flow overview + brush nav   │
@@ -53,9 +54,10 @@ The `index.html` redirects to `attack_timearcs.html` by default.
 │  /src Modular System (ES6 modules)                       │
 │                                                          │
 │  rendering/   bars.js, circles.js, arcPath.js, rows.js   │
-│               arcInteractions.js, tooltip.js             │
+│               arcInteractions.js, highlightUtils.js      │
+│               tooltip.js                                 │
 │  scales/      scaleFactory.js, distortion.js (fisheye)   │
-│  layout/      forceSimulation.js                         │
+│  layout/      forceSimulation.js, force_network.js       │
 │  interaction/ zoom.js, dragReorder.js, resize.js         │
 │  data/        binning.js, csvParser.js, flowReconstruction.js
 │               resolution-manager.js, data-source.js      │
@@ -297,10 +299,10 @@ The `packets` column contains embedded packet data: `delta_ts:flags:dir,...`
 
 The `csv-resolution-manager.js` handles zoom-level dependent packet data loading with 7 resolution levels:
 
-| Resolution | Bin Size | Use When Visible Range |
-|------------|----------|------------------------|
-| hours | 1 hour | > 120 minutes |
-| minutes | 1 minute | > 10 minutes |
+| Resolution | Bin Size | Auto Threshold |
+|------------|----------|----------------|
+| hours | 1 hour | > 2 days |
+| minutes | 1 minute | > 1 hour |
 | seconds | 1 second | > 1 minute |
 | 100ms | 100ms | > 10 seconds |
 | 10ms | 10ms | > 1 second |
@@ -308,6 +310,12 @@ The `csv-resolution-manager.js` handles zoom-level dependent packet data loading
 | raw | individual packets | ≤ 100ms |
 
 Coarse resolutions (hours, minutes, seconds) use single-file `data.csv` files loaded at initialization. Fine resolutions (100ms, 10ms, 1ms, raw) use chunked files loaded on-demand with LRU caching.
+
+**Resolution Selection** (`getResolutionForVisibleRange()` in `ip_bar_diagram.js`):
+- **Auto mode**: Threshold-based — picks the coarsest level whose threshold the visible range exceeds
+- **Manual override**: Dropdown selects an explicit resolution level. The selected level is used directly. When the user zooms in past the next finer level's threshold, it auto-refines one step at a time (e.g., minutes → seconds → 100ms → ...). Never goes coarser than the selected level.
+- The dropdown labels use "+" suffix (e.g., "Minutes+") to indicate zoom-to-finer behavior
+- A **current resolution indicator** badge next to the dropdown shows the active resolution (blue = auto, orange = manual override)
 
 **Generating multi-resolution flow bins**:
 ```bash
@@ -322,10 +330,63 @@ python packets_data/generate_flow_bins_v3.py --input-dir packets_data/attack_flo
 - Converts timestamps to microseconds for alignment with packet data
 - Filters events by selected IPs for contextual display
 
+### IP Pair Layout System
+
+The visualization uses a sophisticated layout system to prevent overlapping when multiple IP pairs share the same source IP row:
+
+**Per-IP Dynamic Row Heights** (`src/layout/ipPositioning.js`):
+- `computeIPPairCounts()` counts unique destination IPs per source IP
+- Each IP row height is calculated as: `max(ROW_GAP, pairCount * 12 + 8)` pixels
+- `ipRowHeights` Map stored in state for rendering access
+- Cumulative positioning: each IP's y = previous IP's y + previous IP's row height
+
+**IP Pair Vertical Offsets** (`src/rendering/bars.js`, `src/rendering/circles.js`):
+- Pairs within a row are ordered by time of first packet (earliest first)
+- Each pair gets a sub-row offset: `pairIndex * (subRowHeight + SUB_ROW_GAP)`
+- First pair (index 0) aligns with the IP label baseline
+- Subsequent pairs grow downward within the row's allocated height
+- `makeIpPairKey(srcIp, dstIp)` creates canonical keys (alphabetically sorted)
+
+**Arc Path Connections** (`src/rendering/arcPath.js`):
+- `arcPathGenerator()` accepts optional `srcY` and `dstY` for offset positions
+- Hover handlers calculate both source and destination offsets using `calculateYPosWithOffset()`
+- Arcs connect circle-to-circle at their actual offset positions, not baselines
+
+**Row Collapse Behavior**:
+- All IP rows with multiple pairs start **collapsed by default** (`defaultCollapseApplied` flag)
+- `state.layout.collapsedIPs` Set tracks which IPs have their sub-rows merged
+- Click individual IP labels to expand/collapse; "Collapse All"/"Expand All" buttons in control panel
+- Collapsed rows merge all pair bins at same (time, yPos, flagType) into single circles
+
+**Key Data Structures**:
+```javascript
+// ipPairOrderByRow: Map<yPos, { order: Map<ipPairKey, index>, count: number }>
+// ipRowHeights: Map<ip, heightInPixels>
+// ipPairCounts: Map<ip, numberOfUniquePairs>
+// collapsedIPs: Set<ip> - IPs whose sub-rows are collapsed
+```
+
 ### Force-Directed Layout
 
 - **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints
+- **Force Network** (`src/layout/force_network.js`): 2D force layout used as alternate view mode in TimeArcs. Aggregates arc data by IP pair + attack type, renders with D3 force simulation. Supports `precalculate()` for pre-computing positions (used during animated transitions) and `staticStart` rendering
 - **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
+
+### Shared Highlight Logic
+
+`src/rendering/highlightUtils.js` provides shared hover highlight functions used by both timearcs (`arcInteractions.js`) and force layout (`force_network.js`):
+- `highlightHoveredLink()` / `unhighlightLinks()` — dim all links, highlight hovered
+- `getLinkHighlightInfo()` — compute active IPs and attack color from link datum (handles both timearcs arc shape and force link shape)
+- `highlightEndpointLabels()` / `unhighlightEndpointLabels()` — bold, enlarge, color active IP labels; dim others
+- `ipFromDatum()` (internal) — normalizes datum to IP string (timearcs labels bind raw strings, force layout nodes bind `{id, degree}` objects)
+
+### Floating Control Panel
+
+The control panel (`control-panel.js`) is a `position: fixed` aside with drag-to-move and click-to-collapse behavior:
+- **Drag handle**: Title bar at top — click to collapse/expand, drag to reposition
+- **Zoom controls bar**: Positioned above the panel via `position: absolute; bottom: 100%`. Contains resolution dropdown, current resolution indicator badge, and zoom +/- buttons. Stays visible when panel is collapsed. Moves with the panel on drag.
+- **Controls body**: Scrollable area with IP selection, TCP flags, legends, flow visualization options
+- Panel uses `overflow: visible` so the zoom bar (absolutely positioned above) is not clipped
 
 ### Fisheye Distortion
 
@@ -346,9 +407,9 @@ The fisheye lens effect (`src/plugins/d3-fisheye.js`, wrapped by `src/scales/dis
 ## Module Dependencies
 
 Main files import heavily from `/src`:
-- **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`
+- **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`, `highlightUtils.js`
 - **Data**: `binning.js`, `flowReconstruction.js`, `csvParser.js`, `aggregation.js`, `resolution-manager.js`, `data-source.js`, `component-loader.js`
-- **Layout**: `forceSimulation.js`
+- **Layout**: `forceSimulation.js`, `force_network.js`
 - **Interaction**: `zoom.js`, `arcInteractions.js`, `dragReorder.js`, `resize.js`
 - **Scales**: `scaleFactory.js`, `distortion.js`
 - **Ground Truth**: `groundTruth.js`

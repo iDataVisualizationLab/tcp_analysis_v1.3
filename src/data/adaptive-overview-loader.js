@@ -247,17 +247,24 @@ export class AdaptiveOverviewLoader {
      * @param {number} timeEnd - End time in microseconds
      * @param {Object} options - Additional options
      * @param {number} options.targetBinCount - Target number of bins for display (default: 100)
+     * @param {string} options.resolution - Force a specific resolution (overrides auto-selection)
      * @returns {Promise<Object>} Overview data with bins and metadata
      */
     async getOverviewData(selectedIPs, timeStart, timeEnd, options = {}) {
-        const { targetBinCount = 100 } = options;
+        const { targetBinCount = 100, resolution: forcedResolution } = options;
 
         // Calculate time range in minutes
         const timeRangeUs = timeEnd - timeStart;
         const timeRangeMinutes = timeRangeUs / 60_000_000;
 
-        // Select appropriate resolution
-        const resolution = this.selectResolution(timeRangeMinutes);
+        // Select appropriate resolution (use forced resolution if provided and valid)
+        let resolution;
+        if (forcedResolution && this.index && this.index.resolutions[forcedResolution]) {
+            resolution = forcedResolution;
+            console.log(`[AdaptiveOverview] Using forced resolution: ${resolution}`);
+        } else {
+            resolution = this.selectResolution(timeRangeMinutes);
+        }
 
         // Track resolution changes
         if (resolution !== this.currentResolution) {

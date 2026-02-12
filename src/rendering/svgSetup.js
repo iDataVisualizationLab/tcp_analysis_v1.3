@@ -133,13 +133,15 @@ export function createBottomOverlay(options) {
 }
 
 /**
- * Render IP row labels on the left gutter.
+ * Render IP row labels on the left gutter with background highlight rectangles.
  *
  * @param {Object} options - Configuration options
  * @param {Object} options.d3 - D3 library reference
  * @param {Object} options.svg - D3 selection of main SVG group
  * @param {Array<string>} options.yDomain - Ordered list of IPs
  * @param {Map<string, number>} options.ipPositions - Map of IP -> y position
+ * @param {number} [options.chartWidth] - Chart width for row highlight rectangles
+ * @param {number} [options.rowHeight] - Row height for highlight rectangles (default 20)
  * @param {Function} options.onHighlight - Highlight callback (ip) => void
  * @param {Function} options.onClearHighlight - Clear highlight callback () => void
  * @returns {Object} D3 selection of node groups
@@ -150,9 +152,33 @@ export function renderIPRowLabels(options) {
         svg,
         yDomain,
         ipPositions,
+        chartWidth = 2000,
+        rowHeight = 20,
         onHighlight,
-        onClearHighlight
+        onClearHighlight,
+        ipPairCounts = null,
+        collapsedIPs = null,
+        onToggleCollapse = null,
+        ipPairOrderByRow = null,
+        ipRowHeights = null
     } = options;
+
+    // Create row highlight rectangles (behind everything)
+    // Insert at the beginning so they're behind other elements
+    const highlightGroup = svg.insert('g', ':first-child')
+        .attr('class', 'row-highlights');
+
+    highlightGroup.selectAll('.row-highlight')
+        .data(yDomain)
+        .enter()
+        .append('rect')
+        .attr('class', 'row-highlight')
+        .attr('x', 0)
+        .attr('y', d => (ipPositions.get(d) || 0) - rowHeight / 2)
+        .attr('width', chartWidth)
+        .attr('height', d => (ipRowHeights && ipRowHeights.get(d)) || rowHeight)
+        .style('fill', '#4dabf7')
+        .style('opacity', 0);
 
     const nodes = svg.selectAll('.node')
         .data(yDomain)
@@ -169,7 +195,26 @@ export function renderIPRowLabels(options) {
         .text(d => d)
         .on('mouseover', (e, d) => {
             if (onHighlight) {
-                try { onHighlight({ ip: d }); } catch (_) { /* ignore */ }
+                try {
+                    // When expanded with multiple pairs, highlight pair at index 0
+                    const pairCount = ipPairCounts ? (ipPairCounts.get(d) || 1) : 1;
+                    const isExpanded = pairCount > 1 && !(collapsedIPs && collapsedIPs.has(d));
+                    if (isExpanded && ipPairOrderByRow) {
+                        const baseY = ipPositions.get(d);
+                        const pairInfo = ipPairOrderByRow.get(baseY);
+                        if (pairInfo) {
+                            for (const [pairKey, idx] of pairInfo.order) {
+                                if (idx === 0) {
+                                    const parts = pairKey.split('<->');
+                                    const partnerIp = parts[0] === d ? parts[1] : parts[0];
+                                    onHighlight({ ip: d, pairIp: partnerIp });
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    onHighlight({ ip: d });
+                } catch (_) { /* ignore */ }
             }
         })
         .on('mouseout', () => {
@@ -177,6 +222,140 @@ export function renderIPRowLabels(options) {
                 try { onClearHighlight(); } catch (_) { /* ignore */ }
             }
         });
+
+    // Add collapse/expand triangle buttons for IPs with >1 pair
+    if (onToggleCollapse && ipPairCounts) {
+        nodes.each(function(ip) {
+            const pairCount = ipPairCounts.get(ip) || 1;
+            if (pairCount <= 1) return;
+
+            const node = d3.select(this);
+            const isCollapsed = collapsedIPs && collapsedIPs.has(ip);
+            const labelNode = node.select('.node-label').node();
+
+            // Position triangle to the left of the label text using actual text width
+            let toggleX = -24;
+            try {
+                const bbox = labelNode.getBBox();
+                // bbox.x is negative (text-anchor: end), so left edge = bbox.x
+                toggleX = bbox.x - 10;
+            } catch (_) {}
+
+            const toggle = node.append('g')
+                .attr('class', 'collapse-toggle')
+                .attr('transform', `translate(${toggleX}, 0)`)
+                .style('cursor', 'pointer');
+
+            // Circle background
+            toggle.append('circle')
+                .attr('r', 7)
+                .attr('fill', isCollapsed ? '#6c757d' : '#28a745')
+                .attr('stroke', '#fff')
+                .attr('stroke-width', 2)
+                .style('transition', 'fill 0.2s ease');
+
+            // Chevron icon: right for collapsed, down for expanded
+            toggle.append('path')
+                .attr('class', 'collapse-icon')
+                .attr('d', isCollapsed
+                    ? 'M -2 -3 L 2 0 L -2 3'   // chevron right
+                    : 'M -3 -2 L 0 2 L 3 -2')   // chevron down
+                .attr('fill', 'none')
+                .attr('stroke', '#fff')
+                .attr('stroke-width', 2)
+                .attr('stroke-linecap', 'round')
+                .attr('stroke-linejoin', 'round');
+
+            // Pair count badge
+            toggle.append('text')
+                .attr('class', 'pair-count-badge')
+                .attr('x', -12)
+                .attr('dy', '.35em')
+                .attr('text-anchor', 'end')
+                .style('font-size', '9px')
+                .style('fill', '#999')
+                .text(pairCount);
+
+            // Stop mousedown from triggering the drag-reorder behavior
+            toggle
+                .on('mousedown', (event) => {
+                    event.stopPropagation();
+                })
+                .on('click', (event) => {
+                    event.stopPropagation();
+                    onToggleCollapse(ip);
+                })
+                .on('mouseenter', function() {
+                    const ip = d3.select(this.parentNode).datum();
+                    const collapsed = collapsedIPs && collapsedIPs.has(ip);
+                    d3.select(this).select('circle')
+                        .attr('fill', collapsed ? '#5a6268' : '#218838');
+                })
+                .on('mouseleave', function() {
+                    const ip = d3.select(this.parentNode).datum();
+                    const collapsed = collapsedIPs && collapsedIPs.has(ip);
+                    d3.select(this).select('circle')
+                        .attr('fill', collapsed ? '#6c757d' : '#28a745');
+                });
+        });
+    }
+
+    // Add sub-row hover targets and highlight rects for expanded IPs
+    if (ipPairOrderByRow && ipRowHeights && ipPairCounts) {
+        const SUB_ROW_GAP = 2;
+
+        // Sub-row highlight rects (behind everything in highlightGroup).
+        // They double as hover targets: pointer-events: all so they catch
+        // mouse events in empty space, but data circles on top get events first.
+        yDomain.forEach(ip => {
+            const pairCount = ipPairCounts.get(ip) || 1;
+            if (pairCount <= 1) return;
+            if (collapsedIPs && collapsedIPs.has(ip)) return;
+
+            const baseY = ipPositions.get(ip);
+            if (baseY === undefined) return;
+            const pairInfo = ipPairOrderByRow.get(baseY);
+            if (!pairInfo || pairInfo.count <= 1) return;
+
+            const rh = ipRowHeights.get(ip) || rowHeight;
+            const availableHeight = Math.max(20, rh - 6);
+            const totalGaps = Math.max(0, pairInfo.count - 1) * SUB_ROW_GAP;
+            const subRowHeight = Math.max(4, (availableHeight - totalGaps) / pairInfo.count);
+
+            for (const [pairKey, pairIndex] of pairInfo.order) {
+                const parts = pairKey.split('<->');
+                const partnerIp = parts[0] === ip ? parts[1] : parts[0];
+                const centerY = baseY + pairIndex * (subRowHeight + SUB_ROW_GAP);
+
+                const rect = highlightGroup.append('rect')
+                    .attr('class', 'sub-row-highlight')
+                    .datum({ ip, partnerIp, pairKey, pairIndex })
+                    .attr('x', -150)
+                    .attr('y', centerY - subRowHeight / 2)
+                    .attr('width', chartWidth + 150)
+                    .attr('height', subRowHeight)
+                    .style('fill', '#4dabf7')
+                    .style('opacity', 0);
+
+                // Index 0 hover is handled by the main IP label;
+                // other sub-rows need their own hover targets
+                if (pairIndex > 0) {
+                    rect
+                        .style('pointer-events', 'all')
+                        .on('mouseover', function() {
+                            if (onHighlight) {
+                                try { onHighlight({ ip, pairIp: partnerIp }); } catch (_) {}
+                            }
+                        })
+                        .on('mouseout', function() {
+                            if (onClearHighlight) {
+                                try { onClearHighlight(); } catch (_) {}
+                            }
+                        });
+                }
+            }
+        });
+    }
 
     return nodes;
 }

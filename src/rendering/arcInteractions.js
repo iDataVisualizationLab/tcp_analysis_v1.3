@@ -2,6 +2,7 @@
 // Arc hover and interaction logic
 
 import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm';
+import { highlightHoveredLink, unhighlightLinks, getLinkHighlightInfo, highlightEndpointLabels, unhighlightEndpointLabels } from './highlightUtils.js';
 
 /**
  * Create arc hover handler.
@@ -65,33 +66,23 @@ export function createArcHoverHandler(config) {
     }
 
     // Highlight hovered arc at 100% opacity, others at 30%
-    arcPaths.style('stroke-opacity', p => (p === d ? 1 : 0.3));
-    const baseW = widthScale(Math.max(1, d.count));
-    d3.select(this)
-      .attr('stroke-width', Math.max(3, baseW < 2 ? baseW * 3 : baseW * 1.5))
-      .raise();
+    highlightHoveredLink(arcPaths, d, this, widthScale, d3);
 
-    // Highlight connected row lines and labels
-    const active = new Set([d.sourceNode.name, d.targetNode.name]);
+    // Compute shared highlight state
+    const { activeIPs: active, attackColor: attackCol } = getLinkHighlightInfo(d, colorForAttack, getLabelMode());
 
     svg.selectAll('.row-line')
       .attr('stroke-opacity', s => s && s.ip && active.has(s.ip) ? 0.8 : 0.1)
       .attr('stroke-width', s => s && s.ip && active.has(s.ip) ? 1 : 0.4);
 
-    const labelMode = getLabelMode();
-    const attackCol = colorForAttack(
-      (labelMode === 'attack_group' ? d.attack_group : d.attack) || 'normal'
-    );
-
     const labelSelection = svg.selectAll('.ip-label');
     const labelsCompressedMode = getLabelsCompressedMode();
 
-    labelSelection
-      .attr('font-weight', s => active.has(s) ? 'bold' : null)
-      .style('font-size', s => active.has(s) ? '14px' : null)
-      .style('fill', s => active.has(s) ? attackCol : '#343a40')
-      // Ensure endpoint labels are visible even if baseline labels are hidden
-      .style('opacity', s => {
+    // Shared label highlight (bold, larger, attack color)
+    highlightEndpointLabels(labelSelection, active, attackCol);
+
+    // Timearcs-specific: visibility based on component expansion / compressed mode
+    labelSelection.style('opacity', s => {
         // Always show labels for the active arc endpoints
         if (active.has(s)) return 1;
 
@@ -130,7 +121,7 @@ export function createArcHoverHandler(config) {
     const dt = toDate(d.minute);
     const timeStr = looksAbsolute ? timeFormatter(dt) : `t=${d.minute - base} ${unitSuffix}`;
     const content = `${d.sourceNode.name} → ${d.targetNode.name}<br>` +
-      (labelMode === 'attack_group'
+      (getLabelMode() === 'attack_group'
         ? `Attack Group: ${d.attack_group || 'normal'}<br>`
         : `Attack: ${d.attack || 'normal'}<br>`) +
       `${timeStr}<br>` +
@@ -191,21 +182,17 @@ export function createArcLeaveHandler(config) {
     hideTooltip();
 
     // Restore default opacity
-    arcPaths
-      .style('stroke-opacity', 0.6)
-      .attr('stroke-width', d => widthScale(Math.max(1, d.count)));
+    unhighlightLinks(arcPaths, widthScale);
 
     // Restore row lines
     svg.selectAll('.row-line')
       .attr('stroke-opacity', 1)
       .attr('stroke-width', 0.4);
 
-    // Restore labels
+    // Restore labels (shared unhighlight)
     const labelSelection = svg.selectAll('.ip-label');
+    unhighlightEndpointLabels(labelSelection);
     labelSelection
-      .attr('font-weight', null)
-      .style('font-size', null)
-      .style('fill', '#343a40')
       .transition()
       .duration(200)
       .attr('x', s => {

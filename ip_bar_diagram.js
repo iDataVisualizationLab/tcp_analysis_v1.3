@@ -59,7 +59,9 @@ import {
 import {
     computeIPCounts,
     computeIPPositioning,
-    applyIPPositioningToState
+    applyIPPositioningToState,
+    computeIPPairOrderByRow,
+    computeIPPairCounts
 } from './src/layout/ipPositioning.js';
 import {
     createSVGStructure,
@@ -108,6 +110,9 @@ try {
 let useMultiRes = false;  // Whether to use multi-resolution data
 let currentResolutionLevel = null;  // Current resolution: 'seconds', 'milliseconds', 'raw', or null
 let isInitialResolutionLoad = true;  // Only sync with overview on initial load, then allow free zoom
+let manualResolutionOverride = null;  // User-selected resolution override (null = auto)
+
+let defaultCollapseApplied = false;  // Auto-collapse all multi-pair IP rows on first render
 
 // --- Web Worker for packet filtering ---
 let workerManager = null;
@@ -259,7 +264,11 @@ const state = {
     layout: {
         ipPositions: new Map(),   // Global IP positions map
         ipOrder: [],              // Current vertical order of IPs
-        pairs: new Map()          // Global pairs map for IP pairing system
+        pairs: new Map(),         // Global pairs map for IP pairing system
+        ipPairCounts: new Map(),  // Count of unique destination IPs per source IP
+        ipRowHeights: new Map(),  // Per-IP row heights based on pair count
+        ipConnectivity: new Map(), // Map<ip, Set<connectedIps>> for row highlighting
+        collapsedIPs: new Set()   // Set of IPs whose sub-rows are collapsed into one
     },
 
     // Phase 5: Flows (medium coupling, ~60 refs)
@@ -280,13 +289,169 @@ const state = {
     }
 };
 
+// Create canonical IP pair key (alphabetically ordered)
+function makeIpPairKey(srcIp, dstIp) {
+    if (!srcIp || !dstIp) return 'unknown';
+    return srcIp < dstIp ? `${srcIp}<->${dstIp}` : `${dstIp}<->${srcIp}`;
+}
+
+/**
+ * Merge bins for collapsed IPs: bins at the same (time, yPos, flagType) from
+ * different IP pairs are combined into a single bin with summed counts.
+ * Only bins whose src_ip is in the collapsedIPs set are merged.
+ */
+function collapseSubRowsBins(binned, collapsedIPs) {
+    if (!collapsedIPs || collapsedIPs.size === 0) return binned;
+    const pass = [];     // bins for non-collapsed IPs (unchanged)
+    const merge = [];    // bins for collapsed IPs (need merging)
+    for (const d of binned) {
+        if (d.src_ip && collapsedIPs.has(d.src_ip)) {
+            merge.push(d);
+        } else {
+            pass.push(d);
+        }
+    }
+    if (merge.length === 0) return binned;
+
+    // Group by (time | yPos | flagType)
+    const groups = new Map();
+    for (const d of merge) {
+        const t = Number.isFinite(d.binCenter) ? Math.floor(d.binCenter)
+            : (Number.isFinite(d.binTimestamp) ? Math.floor(d.binTimestamp) : Math.floor(d.timestamp));
+        const ft = d.flagType || 'OTHER';
+        const key = `${t}|${d.yPos}|${ft}`;
+        let g = groups.get(key);
+        if (!g) {
+            g = {
+                ...d,
+                count: 0,
+                totalBytes: 0,
+                originalPackets: [],
+                ipPairs: [],
+                _seenPairs: new Set()
+            };
+            groups.set(key, g);
+        }
+        g.count += (d.count || 1);
+        g.totalBytes = (g.totalBytes || 0) + (d.totalBytes || 0);
+        if (Array.isArray(d.originalPackets)) {
+            g.originalPackets.push(...d.originalPackets);
+        }
+        const pk = makeIpPairKey(d.src_ip, d.dst_ip);
+        if (!g._seenPairs.has(pk)) {
+            g._seenPairs.add(pk);
+            g.ipPairs.push({ src_ip: d.src_ip, dst_ip: d.dst_ip, count: d.count || 1 });
+        }
+    }
+    for (const g of groups.values()) {
+        g.ipPairKey = '__collapsed__';
+        delete g._seenPairs;
+        pass.push(g);
+    }
+    return pass;
+}
+
+/**
+ * Compute the maximum merged bin count per collapsed IP.
+ * Mirrors the grouping logic of collapseSubRowsBins but only tracks max counts.
+ * Used to update globalMaxBinCount and row heights for collapsed IPs.
+ * @param {Array} binnedPackets - Binned packet data (pre-collapse)
+ * @param {Set} collapsedIPs - Set of collapsed IP addresses
+ * @returns {Object|null} { globalMax, maxPerIP: Map<string, number> } or null if no collapsed IPs
+ */
+function computeCollapsedMaxCounts(binnedPackets, collapsedIPs) {
+    if (!collapsedIPs || collapsedIPs.size === 0) return null;
+    const maxPerIP = new Map();
+    const groups = new Map(); // key: "ip|time|flag" → count
+    for (const d of binnedPackets) {
+        if (!d.src_ip || !collapsedIPs.has(d.src_ip)) continue;
+        const t = Number.isFinite(d.binCenter) ? Math.floor(d.binCenter)
+            : (Number.isFinite(d.binTimestamp) ? Math.floor(d.binTimestamp) : Math.floor(d.timestamp));
+        const ft = d.flagType || 'OTHER';
+        const key = `${d.src_ip}|${t}|${ft}`;
+        groups.set(key, (groups.get(key) || 0) + (d.count || 1));
+    }
+    let globalMax = 0;
+    for (const [key, count] of groups) {
+        const ip = key.split('|')[0];
+        if (count > (maxPerIP.get(ip) || 0)) maxPerIP.set(ip, count);
+        if (count > globalMax) globalMax = count;
+    }
+    return { globalMax, maxPerIP };
+}
+
+/**
+ * Apply collapse overrides to ipPairOrderByRow for collapsed IPs.
+ * All pairs for a collapsed IP get index 0, count 1.
+ */
+function applyCollapseOverrides(ipPairOrderByRow) {
+    if (!state.layout.collapsedIPs.size) return;
+    for (const ip of state.layout.collapsedIPs) {
+        const yPos = state.layout.ipPositions.get(ip);
+        if (yPos === undefined) continue;
+        const pairInfo = ipPairOrderByRow.get(yPos);
+        if (pairInfo) {
+            const collapsedOrder = new Map();
+            for (const key of pairInfo.order.keys()) collapsedOrder.set(key, 0);
+            ipPairOrderByRow.set(yPos, { order: collapsedOrder, count: 1 });
+        }
+    }
+}
+
+/**
+ * Compute y position for an IP accounting for sub-row offset within an expanded row.
+ * Falls back to base ipPositions when sub-row data is unavailable.
+ */
+function getIPYWithSubRowOffset(ip, srcIp, dstIp) {
+    const baseY = findIPPosition(ip, srcIp, dstIp, state.layout.pairs, state.layout.ipPositions);
+    if (!baseY || !state.layout.ipPairOrderByRow) return baseY;
+    const pairKey = makeIpPairKey(srcIp, dstIp);
+    const pairInfo = state.layout.ipPairOrderByRow.get(baseY);
+    if (!pairInfo || pairInfo.count <= 1) return baseY;
+    const pairIndex = pairInfo.order.get(pairKey) || 0;
+    const rh = (state.layout.ipRowHeights && state.layout.ipRowHeights.get(ip)) || ROW_GAP;
+    const availableHeight = Math.max(20, rh - 6);
+    const totalGaps = Math.max(0, pairInfo.count - 1) * 2;
+    const subRowHeight = Math.max(4, (availableHeight - totalGaps) / pairInfo.count);
+    return baseY + pairIndex * (subRowHeight + 2);
+}
+
+/**
+ * Sync sub-row-highlight rect positions with current state.layout.
+ * Called after any position recalculation (collapse adjustment, drag reorder).
+ */
+function syncSubRowHighlights(svgEl, st) {
+    const SUB_ROW_GAP = 2;
+    svgEl.selectAll('.sub-row-highlight').each(function() {
+        const rect = d3.select(this);
+        const d = rect.datum();
+        if (!d || !d.ip) return;
+        const baseY = st.layout.ipPositions.get(d.ip);
+        if (baseY === undefined) return;
+        const rh = (st.layout.ipRowHeights && st.layout.ipRowHeights.get(d.ip)) || ROW_GAP;
+        const pairInfo = st.layout.ipPairOrderByRow.get(baseY);
+        if (!pairInfo) return;
+        const availableHeight = Math.max(20, rh - 6);
+        const totalGaps = Math.max(0, pairInfo.count - 1) * SUB_ROW_GAP;
+        const subRowHeight = Math.max(4, (availableHeight - totalGaps) / pairInfo.count);
+        const centerY = baseY + d.pairIndex * (subRowHeight + SUB_ROW_GAP);
+        rect.attr('y', centerY - subRowHeight / 2)
+            .attr('height', subRowHeight);
+    });
+}
+
 // Wrapper to call imported renderBars with required options
 function renderBarsWithOptions(layer, binned) {
-    renderBars(layer, binned, {
+    const data = collapseSubRowsBins(binned, state.layout.collapsedIPs);
+    renderBars(layer, data, {
         xScale,
         flagColors,
         globalMaxBinCount,
         ROW_GAP,
+        ipRowHeights: state.layout.ipRowHeights,
+        ipPairCounts: state.layout.ipPairCounts,
+        ipPositions: state.layout.ipPositions,
+        stableIpPairOrderByRow: state.layout.ipPairOrderByRow,
         formatBytes,
         formatTimestamp,
         d3
@@ -295,11 +460,16 @@ function renderBarsWithOptions(layer, binned) {
 
 // Wrapper to call imported renderCircles with required options and event handlers
 function renderCirclesWithOptions(layer, binned, rScale) {
-    renderCircles(layer, binned, {
+    const data = collapseSubRowsBins(binned, state.layout.collapsedIPs);
+    renderCircles(layer, data, {
         xScale,
         rScale,
         flagColors,
         RADIUS_MIN,
+        ROW_GAP,
+        ipRowHeights: state.layout.ipRowHeights,
+        ipPairCounts: state.layout.ipPairCounts,
+        stableIpPairOrderByRow: state.layout.ipPairOrderByRow,
         mainGroup,
         arcPathGenerator,
         findIPPosition,
@@ -492,6 +662,33 @@ function initializeBarVisualization() {
         onIpSearch: (term) => sbFilterIPList(term),
         onSelectAllIPs: () => { document.querySelectorAll('#ipCheckboxes input[type="checkbox"]').forEach(cb => cb.checked = true); updateIPFilter(); },
         onClearAllIPs: () => { document.querySelectorAll('#ipCheckboxes input[type="checkbox"]').forEach(cb => cb.checked = false); updateIPFilter(); },
+        onCollapseAllRows: () => {
+            // Add all IPs that have multiple pairs to the collapsed set
+            for (const ip of state.layout.ipOrder) {
+                if ((state.layout.ipPairCounts.get(ip) || 1) > 1) {
+                    state.layout.collapsedIPs.add(ip);
+                }
+            }
+            isHardResetInProgress = true;
+            visualizeTimeArcs(state.data.filtered);
+            updateTcpFlowPacketsGlobal();
+            drawSelectedFlowArcs();
+            applyInvalidReasonFilter();
+            // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
+            const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
+            refreshAdaptiveOverview(selIPs).catch(e => console.warn('[CollapseAll] Overview refresh failed:', e));
+        },
+        onExpandAllRows: () => {
+            state.layout.collapsedIPs.clear();
+            isHardResetInProgress = true;
+            visualizeTimeArcs(state.data.filtered);
+            updateTcpFlowPacketsGlobal();
+            drawSelectedFlowArcs();
+            applyInvalidReasonFilter();
+            // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
+            const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
+            refreshAdaptiveOverview(selIPs).catch(e => console.warn('[ExpandAll] Overview refresh failed:', e));
+        },
         onToggleShowTcpFlows: (checked) => { state.ui.showTcpFlows = checked; updateTcpFlowPacketsGlobal(); drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleEstablishment: (checked) => { state.ui.showEstablishment = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleDataTransfer: (checked) => { state.ui.showDataTransfer = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
@@ -562,6 +759,9 @@ function initializeBarVisualization() {
         applyZoomDomain,
         setIsHardResetInProgress: (val) => { isHardResetInProgress = val; }
     });
+
+    // Populate resolution dropdown
+    populateResolutionDropdown();
 
     // Wire Flow List modal controls
     try {
@@ -767,6 +967,17 @@ let flowUpdateTimeout = null;
 function applyZoomDomain(newDomain, source = 'program') {
     // If the source is the brush, notify overview to avoid circular updates
     if (source === 'brush') { try { setBrushUpdating(true); } catch(e) { logCatchError('setBrushUpdating', e); } }
+
+    // Log for debugging time range issues
+    if (source === 'timearcs') {
+        console.log('[applyZoomDomain] Called from timearcs with:', {
+            newDomain,
+            'state.data.timeExtent': state.data.timeExtent,
+            'state.timearcs.overviewTimeExtent': state.timearcs.overviewTimeExtent,
+            'newDomain range (seconds)': (newDomain[1] - newDomain[0]) / 1_000_000,
+            'timeExtent range (seconds)': state.data.timeExtent ? (state.data.timeExtent[1] - state.data.timeExtent[0]) / 1_000_000 : 'N/A'
+        });
+    }
 
     // In flow detail mode, use the flow's time extent as the base for zoom calculations
     let effectiveTimeExtent = state.data.timeExtent;
@@ -1396,7 +1607,9 @@ function drawSelectedFlowArcs() {
         if (!isFlagVisibleByPhase(ftype, { showEstablishment: state.ui.showEstablishment, showDataTransfer: state.ui.showDataTransfer, showClosing: state.ui.showClosing })) return;
 
         const pathPacket = g.rep;
-        const path = arcPathGenerator(pathPacket, { xScale, ipPositions: state.layout.ipPositions, pairs: state.layout.pairs, findIPPosition, flagCurvature: FLAG_CURVATURE });
+        const srcY = getIPYWithSubRowOffset(pathPacket.src_ip, pathPacket.src_ip, pathPacket.dst_ip);
+        const dstY = getIPYWithSubRowOffset(pathPacket.dst_ip, pathPacket.src_ip, pathPacket.dst_ip);
+        const path = arcPathGenerator(pathPacket, { xScale, ipPositions: state.layout.ipPositions, pairs: state.layout.pairs, findIPPosition, flagCurvature: FLAG_CURVATURE, srcY, dstY });
         if (path && pathPacket.src_ip !== pathPacket.dst_ip) {
             // Lookup bin count using the group's time bucket (g.timestamp) and the source row y position
             const yPos = findIPPosition(pathPacket.src_ip, pathPacket.src_ip, pathPacket.dst_ip, state.layout.pairs, state.layout.ipPositions);
@@ -1455,12 +1668,17 @@ function drawGroundTruthBoxes(selectedIPs) {
         findIPPosition,
         pairs: state.layout.pairs,
         ipPositions: state.layout.ipPositions,
-        eventColors
+        eventColors,
+        subRowLayout: {
+            ipPairOrderByRow: state.layout.ipPairOrderByRow,
+            ipRowHeights: state.layout.ipRowHeights,
+            rowGap: ROW_GAP
+        }
     });
 
     // Update boxes
     const boxes = groundTruthGroup.selectAll('.ground-truth-box')
-        .data(boxData, d => `${d.event.source}-${d.event.destination}-${d.event.startTimeMicroseconds}-${d.ip}-${d.isSource ? 'src' : 'dst'}`);
+        .data(boxData, d => `${d.event.source}-${d.event.destination}-${d.event.startTimeMicroseconds}-${d.ip}-${d.isSource ? 'src' : 'dst'}-${d.pairIndex}`);
 
     boxes.exit().remove();
 
@@ -1502,10 +1720,32 @@ function drawGroundTruthBoxes(selectedIPs) {
     }
     function moveTooltip(e) { d3.select('#tooltip').style('left', `${e.pageX + 40}px`).style('top', `${e.pageY - 40}px`); }
     function hideTooltip() { d3.select('#tooltip').style('display','none'); }
+
+    function isSameEvent(a, b) {
+        return a.event.source === b.event.source
+            && a.event.destination === b.event.destination
+            && a.event.startTimeMicroseconds === b.event.startTimeMicroseconds;
+    }
+    function highlightPair(event, d) {
+        showTooltip(event, d);
+        groundTruthGroup.selectAll('.ground-truth-box')
+            .style('fill-opacity', o => isSameEvent(o, d) ? 0.55 : 0.12)
+            .style('stroke-opacity', o => isSameEvent(o, d) ? 1 : 0.25);
+        groundTruthGroup.selectAll('.ground-truth-label')
+            .style('opacity', o => isSameEvent(o, d) ? 1 : 0.25);
+    }
+    function unhighlightPair() {
+        hideTooltip();
+        groundTruthGroup.selectAll('.ground-truth-box')
+            .style('fill-opacity', null)
+            .style('stroke-opacity', null);
+        groundTruthGroup.selectAll('.ground-truth-label')
+            .style('opacity', null);
+    }
     groundTruthGroup.selectAll('.ground-truth-box')
-        .on('mouseover', showTooltip)
+        .on('mouseover', highlightPair)
         .on('mousemove', moveTooltip)
-        .on('mouseout', hideTooltip);
+        .on('mouseout', unhighlightPair);
 
     // Update all boxes (existing and new)
     groundTruthGroup.selectAll('.ground-truth-box')
@@ -1514,9 +1754,23 @@ function drawGroundTruthBoxes(selectedIPs) {
         .attr('width', d => d.width)
         .attr('height', d => d.height);
 
-    // Add labels for events that are wide enough (only on source IP boxes to avoid duplication)
+    // Sort DOM order so wider boxes are behind (rendered first) and narrower on top.
+    // For same size + position on the same row, order by pairIndex.
+    groundTruthGroup.selectAll('.ground-truth-box')
+        .sort((a, b) => {
+            // Group by row (same y = same row)
+            if (Math.abs(a.y - b.y) > 0.5) return a.y - b.y;
+            // Wider boxes behind (earlier in DOM)
+            if (Math.abs(a.width - b.width) > 0.5) return b.width - a.width;
+            // Same width: sort by x so leftmost is behind
+            if (Math.abs(a.x - b.x) > 0.5) return a.x - b.x;
+            // Same size and position: order by pairIndex
+            return (a.pairIndex || 0) - (b.pairIndex || 0);
+        });
+
+    // Add labels for events that are wide enough (only on first sub-row of source IP to avoid duplication)
     const labels = groundTruthGroup.selectAll('.ground-truth-label')
-        .data(boxData.filter(d => d.width > 50 && d.isSource), d => `${d.event.source}-${d.event.destination}-${d.event.startTimeMicroseconds}-label`);
+        .data(boxData.filter(d => d.width > 50 && d.isSource && d.pairIndex <= 0), d => `${d.event.source}-${d.event.destination}-${d.event.startTimeMicroseconds}-label`);
 
     labels.exit().remove();
 
@@ -1981,15 +2235,54 @@ function updateClosingStats(closings) {
  */
 function updateZoomIndicator(visibleRangeUs, resolution = null) {
     const timeRangeEl = document.getElementById('zoomTimeRange');
-    const resEl = document.getElementById('zoomResolution');
+    const resSelect = document.getElementById('zoomResolution');
+    const currentResIndicator = document.getElementById('currentResolutionLabel');
     if (timeRangeEl) timeRangeEl.textContent = '';
 
-    if (resEl && resolution) {
+    if (resSelect && resolution) {
+        // Get the resolution label
         const resConfig = FETCH_RES_BY_NAME[resolution];
         const label = resConfig?.uiInfo?.label || resolution;
-        resEl.textContent = label;
-    } else if (resEl) {
-        resEl.textContent = '';
+        const icon = resConfig?.uiInfo?.icon || '';
+
+        // Determine what would be auto-selected at this zoom level
+        const autoResolution = getAutoResolutionForRange(visibleRangeUs);
+        const autoConfig = FETCH_RES_BY_NAME[autoResolution];
+        const autoLabel = autoConfig?.uiInfo?.label || autoResolution;
+
+        // Update current resolution indicator
+        if (currentResIndicator) {
+            currentResIndicator.textContent = `${icon} ${label}`.trim();
+
+            // Style indicator based on whether manual override is active
+            const indicatorEl = document.getElementById('currentResolutionIndicator');
+            if (indicatorEl) {
+                if (manualResolutionOverride) {
+                    // Manual override active - highlight in orange
+                    indicatorEl.style.background = 'rgba(255, 152, 0, 0.1)';
+                    indicatorEl.style.borderColor = 'rgba(255, 152, 0, 0.4)';
+                    indicatorEl.style.color = '#ff9800';
+                } else {
+                    // Auto mode - default blue
+                    indicatorEl.style.background = 'rgba(0, 123, 255, 0.1)';
+                    indicatorEl.style.borderColor = 'rgba(0, 123, 255, 0.3)';
+                    indicatorEl.style.color = '#007bff';
+                }
+            }
+        }
+
+        // Update the "Auto" option text to show what would be auto-selected
+        const autoOption = resSelect.querySelector('option[value="auto"]');
+        if (autoOption) {
+            autoOption.textContent = `Auto (${autoLabel})`;
+        }
+
+        // Set dropdown value based on whether manual override is active
+        if (manualResolutionOverride) {
+            resSelect.value = manualResolutionOverride;
+        } else {
+            resSelect.value = 'auto';
+        }
     }
 
     // Update zoom button states when zoom level changes
@@ -1997,6 +2290,172 @@ function updateZoomIndicator(visibleRangeUs, resolution = null) {
         getXScale: () => xScale,
         getTimeExtent: () => state.data.timeExtent
     });
+}
+
+/**
+ * Get the auto-selected resolution for a given visible range (without manual override)
+ * This is used to show what "Auto" would select in the dropdown label
+ */
+function getAutoResolutionForRange(visibleRangeUs) {
+    if (!visibleRangeUs || visibleRangeUs <= 0) {
+        return 'hours';
+    }
+
+    // Use threshold-based logic (same as getResolutionForVisibleRange but without override)
+    for (const res of FETCH_RES_CONFIG) {
+        if (res.name === 'binned') continue;
+        if (visibleRangeUs > res.threshold) {
+            return res.name;
+        }
+    }
+    return '1ms';
+}
+
+/**
+ * Populate the resolution dropdown with available resolutions
+ */
+function populateResolutionDropdown() {
+    const resSelect = document.getElementById('zoomResolution');
+    if (!resSelect) return;
+
+    // Clear existing options except Auto
+    while (resSelect.options.length > 1) {
+        resSelect.remove(1);
+    }
+
+    // Add resolution options from config (excluding 'binned' fallback).
+    // Each option acts as a ceiling — the coarsest allowed level.
+    // "Raw Packets" is the finest, so no "+" suffix needed.
+    const realResolutions = FETCH_RES_CONFIG.filter(r => r.name !== 'binned');
+    for (let i = 0; i < realResolutions.length; i++) {
+        const res = realResolutions[i];
+        const option = document.createElement('option');
+        option.value = res.name;
+        const label = res.uiInfo?.label || res.name;
+        // All levels except the finest get a "+" to indicate zoom-to-finer
+        option.textContent = (i < realResolutions.length - 1) ? `${label}+` : label;
+        resSelect.appendChild(option);
+    }
+
+    // Set up change handler
+    resSelect.addEventListener('change', handleResolutionDropdownChange);
+}
+
+/**
+ * Handle resolution dropdown change
+ */
+async function handleResolutionDropdownChange(event) {
+    const selectedValue = event.target.value;
+
+    if (selectedValue === 'auto') {
+        manualResolutionOverride = null;
+        console.log('[Resolution] Switched to auto mode');
+    } else {
+        manualResolutionOverride = selectedValue;
+        console.log(`[Resolution] Coarsest level set to: ${selectedValue} (zoom refines to finer levels)`);
+    }
+
+    // Trigger a data refresh with the new resolution
+    await refreshWithCurrentResolution();
+}
+
+/**
+ * Refresh the visualization with the current (possibly overridden) resolution
+ */
+async function refreshWithCurrentResolution() {
+    if (!xScale || !state.data.timeExtent) {
+        console.warn('[Resolution] Cannot refresh - missing xScale or timeExtent');
+        return;
+    }
+
+    console.log('[Resolution] Refreshing with resolution:', manualResolutionOverride || 'auto');
+
+    let refreshedMainChart = false;
+
+    // Re-fetch data with the new resolution
+    if (typeof getMultiResData === 'function' && isMultiResAvailable && isMultiResAvailable()) {
+        try {
+            const result = await getMultiResData(xScale, 1);
+            if (result && result.data && result.data.length > 0) {
+                // Update current resolution level
+                currentResolutionLevel = result.resolution;
+                console.log(`[Resolution] Got ${result.data.length} data points for ${result.resolution}`);
+
+                // Recalculate globalMaxBinCount from the new resolution's data
+                const counts = result.data
+                    .filter(d => d.count > 0)
+                    .map(d => d.count);
+                const newMaxCount = counts.length > 0 ? Math.max(...counts) : 1;
+                globalMaxBinCount = Math.max(1, newMaxCount);
+
+                // Adjust for collapsed IPs whose merged bins may exceed pre-collapse max
+                if (state.layout.collapsedIPs.size > 0) {
+                    const dataWithFields = result.data.map(d => ({
+                        ...d,
+                        binCenter: d.bin_start
+                            ? (d.bin_start + (d.bin_end - d.bin_start) / 2)
+                            : d.timestamp,
+                        flagType: d.flagType || d.flag_type || 'OTHER'
+                    }));
+                    const collapsed = computeCollapsedMaxCounts(dataWithFields, state.layout.collapsedIPs);
+                    if (collapsed) {
+                        globalMaxBinCount = Math.max(globalMaxBinCount, collapsed.globalMax);
+                    }
+                }
+                console.log(`[Resolution] Updated globalMaxBinCount to ${globalMaxBinCount}`);
+
+                // Update the size legend to reflect new scale
+                try {
+                    sbUpdateSizeLegend(globalMaxBinCount, RADIUS_MIN, RADIUS_MAX);
+                } catch (e) { logCatchError('sbUpdateSizeLegend', e); }
+            } else {
+                console.warn(`[Resolution] No data available for ${result?.resolution || 'unknown'} resolution, falling back`);
+            }
+
+            // Recompute stable IP pair ordering from the new resolution's data
+            try {
+                state.layout.ipPairOrderByRow = computeIPPairOrderByRow(result.data, state.layout.ipPositions);
+                applyCollapseOverrides(state.layout.ipPairOrderByRow);
+            } catch (e) { logCatchError('recomputeIpPairOrder', e); }
+
+            // Invalidate the full domain cache so the zoom handler doesn't
+            // short-circuit to the cached layer. This forces it through the
+            // multi-res data loading path in its debounced section.
+            fullDomainBinsCache = { version: -1, data: [], binSize: null, sorted: false };
+
+            // Trigger the zoom handler to re-render at the new resolution.
+            // Do NOT set isHardResetInProgress — that causes the zoom handler
+            // to show the full domain cache (which visualizeTimeArcs rebuilds
+            // from state.data.filtered, ignoring the resolution override).
+            applyZoomDomain(xScale.domain(), 'program');
+
+            // Additional updates after re-render
+            try { updateTcpFlowPacketsGlobal(); } catch (e) { logCatchError('updateTcpFlowPacketsGlobal', e); }
+            try { drawSelectedFlowArcs(); } catch (e) { logCatchError('drawSelectedFlowArcs', e); }
+            try { applyInvalidReasonFilter(); } catch (e) { logCatchError('applyInvalidReasonFilter', e); }
+
+            // Update zoom indicator to show new resolution
+            const visibleRangeUs = xScale.domain()[1] - xScale.domain()[0];
+            const resLabel = result?.resolution || (manualResolutionOverride || 'auto');
+            updateZoomIndicator(visibleRangeUs, resLabel);
+
+            refreshedMainChart = true;
+        } catch (err) {
+            console.error('[Resolution] Failed to refresh data:', err);
+        }
+    }
+
+    // Always refresh the overview chart (regardless of whether main chart updated)
+    const selectedIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked'))
+        .map(cb => cb.value);
+
+    // Use setTimeout to ensure any pending renders complete first
+    setTimeout(() => {
+        console.log('[Resolution] Refreshing overview chart...');
+        refreshAdaptiveOverview(selectedIPs)
+            .then(() => console.log('[Resolution] Overview chart refreshed'))
+            .catch(e => console.warn('[Resolution] Overview refresh failed:', e));
+    }, refreshedMainChart ? 100 : 0);
 }
 
 // Wrapper for exportFlowToCSV that provides the state.data.full and helpers
@@ -2069,13 +2528,33 @@ async function refreshAdaptiveOverview(selectedIPs, timeExtent = null) {
     const [timeStart, timeEnd] = effectiveTimeExtent;
     console.log(`[AdaptiveOverview] Refreshing with ${selectedIPs.length} IPs, time range: ${((timeEnd - timeStart) / 60_000_000).toFixed(1)} minutes`);
 
+    // Map main chart resolution to overview chart resolution
+    // Main chart: 'hours', 'minutes', 'seconds', '100ms', '10ms', '1ms', 'raw'
+    // Overview chart: 'hour', '10min', '1min', '1s'
+    const MAIN_TO_OVERVIEW_RESOLUTION = {
+        'hours': 'hour',
+        'minutes': '1min',
+        'seconds': '1s',
+        '100ms': '1s',
+        '10ms': '1s',
+        '1ms': '1s',
+        'raw': '1s'
+    };
+
+    // Determine overview resolution - sync with main chart if manual override is active
+    let overviewResolution = null;
+    if (manualResolutionOverride) {
+        overviewResolution = MAIN_TO_OVERVIEW_RESOLUTION[manualResolutionOverride];
+        console.log(`[AdaptiveOverview] Using manual resolution override: ${manualResolutionOverride} → ${overviewResolution}`);
+    }
+
     try {
         // Get adaptive overview data
         const adaptiveData = await adaptiveOverviewLoader.getOverviewData(
             selectedIPs,
             timeStart,
             timeEnd,
-            { targetBinCount: 100 }
+            { targetBinCount: 100, resolution: overviewResolution }
         );
 
         console.log(`[AdaptiveOverview] Got ${adaptiveData.bins.length} bins at ${adaptiveData.resolution} resolution`);
@@ -2111,6 +2590,25 @@ function filterIPList(searchTerm) {
 }
 
 // createTooltipHTML is now imported from './src/rendering/tooltip.js'
+
+/**
+ * Build IP connectivity map from packet data.
+ * Maps each IP to the set of IPs it communicates with.
+ * @param {Array} packets - Array of packet objects with src_ip and dst_ip
+ * @returns {Map<string, Set<string>>} - Map of IP -> Set of connected IPs
+ */
+function buildIPConnectivity(packets) {
+    const connectivity = new Map();
+    for (const p of packets) {
+        if (!p.src_ip || !p.dst_ip) continue;
+        // Add bidirectional connections
+        if (!connectivity.has(p.src_ip)) connectivity.set(p.src_ip, new Set());
+        if (!connectivity.has(p.dst_ip)) connectivity.set(p.dst_ip, new Set());
+        connectivity.get(p.src_ip).add(p.dst_ip);
+        connectivity.get(p.dst_ip).add(p.src_ip);
+    }
+    return connectivity;
+}
 
 // Global function to find the correct Y position for an IP (single row per IP)
 function findIPPosition(ip, _src_ip, _dst_ip, _pairs, ipPositions) {
@@ -2380,21 +2878,88 @@ function handleFileLoad(event) {
 
 function highlight(selected) {
     const hasSelection = selected && (selected.ip || selected.flag);
-    
-    if (hasSelection && selected.ip) {
+
+    // Get connected IPs for row highlighting
+    const connectedIPs = hasSelection && selected.ip && state.layout.ipConnectivity
+        ? state.layout.ipConnectivity.get(selected.ip) || new Set()
+        : new Set();
+
+    if (hasSelection && selected.ip && selected.pairIp) {
+        // Pair-specific highlighting (sub-row hover)
+        const pairKey = makeIpPairKey(selected.ip, selected.pairIp);
+
+        // Labels: highlight the two IPs in this pair, fade others
+        svg.selectAll(".node-label")
+            .classed("faded", d => d !== selected.ip && d !== selected.pairIp)
+            .classed("highlighted", d => d === selected.ip)
+            .classed("connected", d => d === selected.pairIp);
+
+        // Dots: only show this pair's dots
+        mainGroup.selectAll(".direction-dot")
+            .classed("faded", d => d.ipPairKey !== pairKey && d.ipPairKey !== '__collapsed__')
+            .classed("highlighted", d => d.ipPairKey === pairKey);
+
+        // Bar segments: same treatment (collapsed bins stay visible like dots)
+        mainGroup.selectAll(".bin-bar-segment")
+            .style("opacity", d => {
+                const k = d.ipPairKey || (d.datum && d.datum.ipPairKey);
+                return (k === pairKey || k === '__collapsed__') ? 0.8 : 0.05;
+            });
+
+        // Determine if each IP has sub-row highlights (expanded with >1 pair)
+        const pairIpHasSubRows = (state.layout.ipPairCounts?.get(selected.pairIp) || 1) > 1
+            && !state.layout.collapsedIPs.has(selected.pairIp);
+        const selfIpHasSubRows = (state.layout.ipPairCounts?.get(selected.ip) || 1) > 1
+            && !state.layout.collapsedIPs.has(selected.ip);
+
+        // Row highlights: use full row-highlight for IPs without sub-rows
+        svg.selectAll(".row-highlight")
+            .classed("active", d => d === selected.pairIp && !pairIpHasSubRows)
+            .classed("self", d => d === selected.ip && !selfIpHasSubRows);
+
+        // Sub-row highlights: activate matching pair on expanded rows
+        svg.selectAll(".sub-row-highlight")
+            .classed("active", d => d && d.pairKey === pairKey && d.ip === selected.pairIp)
+            .classed("self", d => d && d.pairKey === pairKey && d.ip === selected.ip);
+
+    } else if (hasSelection && selected.ip) {
         // Simple IP-based highlighting
         svg.selectAll(".node-label")
-            .classed("faded", d => d !== selected.ip)
-            .classed("highlighted", d => d === selected.ip);
-        
+            .classed("faded", d => d !== selected.ip && !connectedIPs.has(d))
+            .classed("highlighted", d => d === selected.ip)
+            .classed("connected", d => d !== selected.ip && connectedIPs.has(d));
+
         mainGroup.selectAll(".direction-dot")
             .classed("faded", d => d.src_ip !== selected.ip && d.dst_ip !== selected.ip)
             .classed("highlighted", d => d.src_ip === selected.ip || d.dst_ip === selected.ip);
+
+        // Highlight row backgrounds for connected IPs
+        svg.selectAll(".row-highlight")
+            .classed("active", d => connectedIPs.has(d))
+            .classed("self", d => d === selected.ip);
+
+        // Clear sub-row highlights
+        svg.selectAll(".sub-row-highlight")
+            .classed("active", false)
+            .classed("self", false);
+
+        // Clear bar segment overrides
+        mainGroup.selectAll(".bin-bar-segment").style("opacity", null);
+
     } else if (hasSelection && selected.flag) {
         // Flag-based highlighting
         mainGroup.selectAll(".direction-dot")
             .classed("faded", d => getFlagType(d) !== selected.flag)
             .classed("highlighted", d => getFlagType(d) === selected.flag);
+
+        // Clear row highlights
+        svg.selectAll(".row-highlight")
+            .classed("active", false)
+            .classed("self", false);
+        svg.selectAll(".sub-row-highlight")
+            .classed("active", false)
+            .classed("self", false);
+        mainGroup.selectAll(".bin-bar-segment").style("opacity", null);
     } else {
         // No selection - reset all highlighting
         mainGroup.selectAll(".direction-dot")
@@ -2402,9 +2967,17 @@ function highlight(selected) {
             .classed("highlighted", false);
         svg.selectAll(".node-label")
             .classed("faded", false)
-            .classed("highlighted", false);
+            .classed("highlighted", false)
+            .classed("connected", false);
+        svg.selectAll(".row-highlight")
+            .classed("active", false)
+            .classed("self", false);
+        svg.selectAll(".sub-row-highlight")
+            .classed("active", false)
+            .classed("self", false);
+        mainGroup.selectAll(".bin-bar-segment").style("opacity", null);
     }
-    
+
     // Update flag stats highlighting
     document.querySelectorAll('#flagStats [data-flag]').forEach(item => {
         if (hasSelection && selected.flag) {
@@ -2776,11 +3349,11 @@ function renderFlowDetailView(flow, packets) {
         }
     });
 
-    // Prepare packets for rendering - add y positions and flag info
+    // Prepare packets for rendering - add y positions with sub-row offset and flag info
     const preparedPackets = packets.map((p, idx) => ({
         ...p,
         _packetIndex: idx,
-        yPos: findIPPosition(p.src_ip, p.src_ip, p.dst_ip, state.layout.pairs, state.layout.ipPositions),
+        yPos: getIPYWithSubRowOffset(p.src_ip, p.src_ip, p.dst_ip),
         flagType: p.flag_type || classifyFlags(p.flags) || 'OTHER',
         binned: false,
         count: 1,
@@ -2828,8 +3401,8 @@ function drawFlowDetailArcs(flow, packets) {
 
         const x1 = xScale(p1.timestamp);
         const x2 = xScale(p2.timestamp);
-        const y1 = state.layout.ipPositions.get(p1.src_ip) || p1.yPos;
-        const y2 = state.layout.ipPositions.get(p2.src_ip) || p2.yPos;
+        const y1 = p1.yPos || getIPYWithSubRowOffset(p1.src_ip, p1.src_ip, p1.dst_ip);
+        const y2 = p2.yPos || getIPYWithSubRowOffset(p2.src_ip, p2.src_ip, p2.dst_ip);
 
         // Get color from flag type of the source packet
         const flagType = p1.flagType || 'OTHER';
@@ -2854,11 +3427,11 @@ function drawFlowDetailArcs(flow, packets) {
 function renderFlowDetailViewZoomed() {
     if (!state.flowDetail.mode || !state.flowDetail.flow || state.flowDetail.packets.length === 0) return;
 
-    // Prepare packets with updated positions
+    // Prepare packets with updated positions (including sub-row offset)
     const preparedPackets = state.flowDetail.packets.map((p, idx) => ({
         ...p,
         _packetIndex: idx,
-        yPos: state.layout.ipPositions.get(p.src_ip) || findIPPosition(p.src_ip, p.src_ip, p.dst_ip, state.layout.pairs, state.layout.ipPositions),
+        yPos: getIPYWithSubRowOffset(p.src_ip, p.src_ip, p.dst_ip),
         flagType: p.flag_type || classifyFlags(p.flags) || 'OTHER',
         binned: false,
         count: 1,
@@ -3024,19 +3597,32 @@ function visualizeTimeArcs(packets) {
     const DOT_RADIUS = 40;
 
     // 6. Compute IP positioning using extracted module
+    // Auto-collapse all multi-pair IP rows on first render
+    if (!defaultCollapseApplied) {
+        defaultCollapseApplied = true;
+        const pairCounts = computeIPPairCounts(packets);
+        for (const [ip, count] of pairCounts) {
+            if (count > 1) state.layout.collapsedIPs.add(ip);
+        }
+    }
+
     state.layout.ipPositions.clear();
     const positioning = computeIPPositioning(packets, {
         state,
         rowGap: ROW_GAP,
         topPad: TOP_PAD,
         timearcsOrder: state.timearcs.ipOrder,
-        dotRadius: DOT_RADIUS
+        dotRadius: DOT_RADIUS,
+        collapsedIPs: state.layout.collapsedIPs
     });
 
     // Apply positioning to state
     applyIPPositioningToState(state, positioning);
     const { yDomain, yRange, minY, maxY } = positioning;
     height = positioning.height;
+
+    // Build IP connectivity map for row highlighting
+    state.layout.ipConnectivity = buildIPConnectivity(packets);
 
     if (state.timearcs.ipOrder && state.timearcs.ipOrder.length > 0) {
         console.log('[IP Order] Using TimeArcs vertical order:', state.layout.ipOrder.length, 'IPs');
@@ -3098,8 +3684,29 @@ function visualizeTimeArcs(packets) {
             svg,
             yDomain,
             ipPositions: state.layout.ipPositions,
+            chartWidth: width,
+            rowHeight: ROW_GAP,
             onHighlight: (data) => highlight(data),
-            onClearHighlight: () => highlight(null)
+            onClearHighlight: () => highlight(null),
+            ipPairCounts: state.layout.ipPairCounts,
+            collapsedIPs: state.layout.collapsedIPs,
+            ipPairOrderByRow: state.layout.ipPairOrderByRow,
+            ipRowHeights: state.layout.ipRowHeights,
+            onToggleCollapse: (ip) => {
+                if (state.layout.collapsedIPs.has(ip)) {
+                    state.layout.collapsedIPs.delete(ip);
+                } else {
+                    state.layout.collapsedIPs.add(ip);
+                }
+                isHardResetInProgress = true;
+                visualizeTimeArcs(state.data.filtered);
+                updateTcpFlowPacketsGlobal();
+                drawSelectedFlowArcs();
+                applyInvalidReasonFilter();
+                // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
+                const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
+                refreshAdaptiveOverview(selIPs).catch(e => console.warn('[ToggleCollapse] Overview refresh failed:', e));
+            }
         });
     } catch (e) { LOG('Failed to build IP labels', e); }
 
@@ -3154,8 +3761,8 @@ function visualizeTimeArcs(packets) {
         renderMarksForLayer: renderMarksForLayerLocal,
         getGlobalMaxBinCount: () => globalMaxBinCount,
         getFlagCounts: () => flagCounts,
-        getMultiResData,
-        isMultiResAvailable,
+        getMultiResData: (...args) => getMultiResData?.(...args),
+        isMultiResAvailable: () => isMultiResAvailable?.(),
         getUseMultiRes: () => useMultiRes,
         setCurrentResolutionLevel: (level) => { currentResolutionLevel = level; },
         logCatchError
@@ -3176,7 +3783,24 @@ function visualizeTimeArcs(packets) {
         svg,
         ipOrder: state.layout.ipOrder,
         ipPositions: state.layout.ipPositions,
+        ipRowHeights: state.layout.ipRowHeights,
         onReorder: () => {
+            try { state.layout.ipPairOrderByRow = computeIPPairOrderByRow(state.data.filtered, state.layout.ipPositions); applyCollapseOverrides(state.layout.ipPairOrderByRow); } catch(e) { logCatchError('recomputeIpPairOrder', e); }
+            try {
+                // Sync row highlights with new positions
+                svg.selectAll('.row-highlight')
+                    .attr('y', d => (state.layout.ipPositions.get(d) || 0) - ROW_GAP / 2)
+                    .attr('height', d => (state.layout.ipRowHeights && state.layout.ipRowHeights.get(d)) || ROW_GAP);
+                syncSubRowHighlights(svg, state);
+                // Update SVG height to fit new layout
+                let maxY = TOP_PAD;
+                for (const ip of state.layout.ipOrder) {
+                    maxY += (state.layout.ipRowHeights && state.layout.ipRowHeights.get(ip)) || ROW_GAP;
+                }
+                const newHeight = Math.max(height, maxY + margin.bottom);
+                svgContainer.attr('height', newHeight + margin.top + margin.bottom);
+                svg.select('#clip rect').attr('height', newHeight + 80);
+            } catch(e) { logCatchError('syncRowHighlightsAndHeight', e); }
             try { fullDomainBinsCache = { version: -1, data: [], binSize: null, sorted: false }; } catch(e) { logCatchError('fullDomainBinsCache.reset', e); }
             try { isHardResetInProgress = true; applyZoomDomain(xScale.domain(), 'program'); } catch(e) { logCatchError('applyZoomDomain', e); }
             try { drawSelectedFlowArcs(); } catch(e) { logCatchError('drawSelectedFlowArcs', e); }
@@ -3213,6 +3837,70 @@ function visualizeTimeArcs(packets) {
 
     globalMaxBinCount = initialRenderData.globalMaxBinCount;
     console.log('[visualizeTimeArcs] globalMaxBinCount set from', initialResolution, 'data:', globalMaxBinCount);
+
+    // Adjust globalMaxBinCount and row heights for collapsed IPs whose merged bins
+    // exceed the pre-collapse max (prevents circles overflowing row boundaries)
+    if (state.layout.collapsedIPs.size > 0) {
+        const collapsed = computeCollapsedMaxCounts(
+            initialRenderData.binnedPackets, state.layout.collapsedIPs
+        );
+        if (collapsed) {
+            globalMaxBinCount = Math.max(globalMaxBinCount, collapsed.globalMax);
+
+            // Compute needed row heights for collapsed IPs based on max radius
+            const rScaleCheck = d3.scaleSqrt()
+                .domain([1, Math.max(1, globalMaxBinCount)])
+                .range([RADIUS_MIN, RADIUS_MAX]);
+
+            let positionsChanged = false;
+            for (const [ip, maxCount] of collapsed.maxPerIP) {
+                const radius = rScaleCheck(maxCount);
+                const needed = Math.max(ROW_GAP, radius * 2 + 10);
+                const current = state.layout.ipRowHeights.get(ip) || ROW_GAP;
+                if (needed > current) {
+                    state.layout.ipRowHeights.set(ip, needed);
+                    positionsChanged = true;
+                }
+            }
+
+            if (positionsChanged) {
+                // Recompute cumulative y positions
+                let currentY = TOP_PAD;
+                state.layout.ipOrder.forEach(ip => {
+                    state.layout.ipPositions.set(ip, currentY);
+                    currentY += state.layout.ipRowHeights.get(ip) || ROW_GAP;
+                });
+                // Update bin yPos values to match new positions
+                for (const d of initialRenderData.binnedPackets) {
+                    if (d.src_ip) {
+                        const newY = state.layout.ipPositions.get(d.src_ip);
+                        if (newY !== undefined) d.yPos = newY;
+                    }
+                }
+                // Rebuild ipPairOrderByRow with new positions so sub-row
+                // offsets resolve correctly (keys are yPos-based)
+                state.layout.ipPairOrderByRow = computeIPPairOrderByRow(
+                    packets, state.layout.ipPositions
+                );
+                applyCollapseOverrides(state.layout.ipPairOrderByRow);
+                // Sync node label positions with updated IP positions
+                svg.selectAll('.node')
+                    .attr('transform', d => `translate(0,${state.layout.ipPositions.get(d)})`);
+                svg.selectAll('.row-highlight')
+                    .attr('y', d => (state.layout.ipPositions.get(d) || 0) - ROW_GAP / 2)
+                    .attr('height', d => (state.layout.ipRowHeights && state.layout.ipRowHeights.get(d)) || ROW_GAP);
+                syncSubRowHighlights(svg, state);
+                // Update SVG height
+                const lastIp = state.layout.ipOrder[state.layout.ipOrder.length - 1];
+                const lastH = state.layout.ipRowHeights.get(lastIp) || ROW_GAP;
+                const newMaxY = state.layout.ipPositions.get(lastIp) || 0;
+                height = Math.max(500, newMaxY + lastH + 40 + TOP_PAD);
+                // Resize SVG container and clip path to new height
+                svgContainer.attr('height', height + margin.top + margin.bottom);
+                svg.select('#clip rect').attr('height', height + (2 * DOT_RADIUS));
+            }
+        }
+    }
 
     fullDomainBinsCache = { version: state.data.version, data: initialRenderData.binnedPackets, binSize: null, sorted: true };
 
@@ -4100,41 +4788,74 @@ const OVERVIEW_TO_PACKET_RESOLUTION = {
 };
 
 /**
- * Determine which resolution to use based on visible range
- * On initial load: sync with overview chart resolution
- * After initial load: use threshold-based logic for free zoom to finer levels
+ * Determine which resolution to use based on visible range.
+ *
+ * Manual override acts as a *ceiling* (coarsest allowed level).
+ * The threshold-based auto logic still runs, and zoom can go finer
+ * than the ceiling, but never coarser.  For example, selecting
+ * "Minutes" means the view starts at minutes and refines to
+ * seconds → 100ms → 10ms → 1ms → raw as the user zooms in.
  */
 function getResolutionForVisibleRange(visibleRangeUs) {
-    // Sanity check: if visible range is invalid or zero, default to hours
+    // Sanity check
     if (!visibleRangeUs || visibleRangeUs <= 0) {
-        console.log(`[Resolution] Invalid visible range (${visibleRangeUs}), defaulting to hours`);
+        if (manualResolutionOverride && FETCH_RES_BY_NAME[manualResolutionOverride]) {
+            return manualResolutionOverride;
+        }
         return 'hours';
     }
 
-    // On initial load only: sync with overview chart resolution
-    if (isInitialResolutionLoad && adaptiveOverviewLoader && adaptiveOverviewLoader.index) {
+    // On initial load only: sync with overview chart resolution (when no manual override)
+    if (!manualResolutionOverride && isInitialResolutionLoad &&
+        adaptiveOverviewLoader && adaptiveOverviewLoader.index) {
         const timeRangeMinutes = visibleRangeUs / 60_000_000;
         const overviewRes = adaptiveOverviewLoader.selectResolution(timeRangeMinutes);
         const mappedRes = OVERVIEW_TO_PACKET_RESOLUTION[overviewRes];
         if (mappedRes && FETCH_RES_BY_NAME[mappedRes]) {
             console.log(`[Resolution] Initial load sync: ${timeRangeMinutes.toFixed(1)} min → overview=${overviewRes} → packets=${mappedRes}`);
-            // Mark initial load as done - subsequent zooms use threshold logic
             isInitialResolutionLoad = false;
             return mappedRes;
         }
     }
 
-    // After initial load (or if no overview): use threshold-based logic for all zoom levels
+    // Threshold-based auto logic — pick the coarsest level whose
+    // threshold the visible range exceeds (list is coarse-to-fine)
+    let autoResolution = '1ms';
     for (const res of FETCH_RES_CONFIG) {
-        // Skip 'binned' - it's only for client-side binning, not a real resolution
         if (res.name === 'binned') continue;
         if (visibleRangeUs > res.threshold) {
-            console.log(`[Resolution] Threshold: ${(visibleRangeUs/1_000_000).toFixed(2)}s → ${res.name}`);
-            return res.name;
+            autoResolution = res.name;
+            break;
         }
     }
-    // Default to finest available resolution if nothing matched
-    return '1ms';
+
+    // If a manual override is set, use it as the selected resolution.
+    // Walk from the override toward finer levels one step at a time:
+    // stay at a level while the visible range is above the next finer
+    // level's threshold, ensuring smooth minutes→seconds→100ms→… progression.
+    if (manualResolutionOverride && FETCH_RES_BY_NAME[manualResolutionOverride]) {
+        const ceilingIdx = FETCH_RES_CONFIG.findIndex(r => r.name === manualResolutionOverride);
+
+        for (let i = ceilingIdx; i < FETCH_RES_CONFIG.length; i++) {
+            const nextIdx = i + 1;
+            if (nextIdx >= FETCH_RES_CONFIG.length ||
+                FETCH_RES_CONFIG[nextIdx].name === 'binned') {
+                // Reached the finest real level
+                console.log(`[Resolution] Manual walk → ${FETCH_RES_CONFIG[i].name} (finest)`);
+                return FETCH_RES_CONFIG[i].name;
+            }
+            if (visibleRangeUs >= FETCH_RES_CONFIG[nextIdx].threshold) {
+                // Visible range is above next level's threshold — use this level
+                console.log(`[Resolution] Manual walk → ${FETCH_RES_CONFIG[i].name} (visible ${(visibleRangeUs/1_000_000).toFixed(2)}s >= ${FETCH_RES_CONFIG[nextIdx].name} threshold ${(FETCH_RES_CONFIG[nextIdx].threshold/1_000_000).toFixed(2)}s)`);
+                return FETCH_RES_CONFIG[i].name;
+            }
+        }
+        // Fallback (shouldn't reach here)
+        return manualResolutionOverride;
+    }
+
+    console.log(`[Resolution] Threshold: ${(visibleRangeUs/1_000_000).toFixed(2)}s → ${autoResolution}`);
+    return autoResolution;
 }
 
 /**
@@ -4149,7 +4870,21 @@ async function fetchGetMultiResData(xScale, zoomLevel) {
     }
 
     const domain = xScale.domain();
-    const [start, end] = [Math.floor(domain[0]), Math.floor(domain[1])];
+    let [start, end] = [Math.floor(domain[0]), Math.floor(domain[1])];
+
+    // If TimeArcs selection is active, clamp to the selection time range
+    // This prevents loading data outside the user's selection when panning
+    if (state.timearcs.overviewTimeExtent &&
+        state.timearcs.overviewTimeExtent[0] < state.timearcs.overviewTimeExtent[1]) {
+        const [timeMin, timeMax] = state.timearcs.overviewTimeExtent;
+        start = Math.max(start, timeMin);
+        end = Math.min(end, timeMax);
+        // If panned completely outside the selection, return empty
+        if (start >= end) {
+            return { data: [], resolution: 'hours', preBinned: true };
+        }
+    }
+
     const visibleRange = end - start;
 
     const resolution = getResolutionForVisibleRange(visibleRange);
