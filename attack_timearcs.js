@@ -191,10 +191,10 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
   }
 
   // User-selected labeling mode: 'timearcs' or 'force_layout'
-  let labelMode = 'timearcs';
+  let labelMode = 'force_layout';
 
   // Force layout mode state
-  let layoutMode = 'timearcs'; // 'timearcs' | 'force_layout'
+  let layoutMode = 'force_layout'; // 'timearcs' | 'force_layout'
   let forceLayout = null;      // ForceNetworkLayout instance (null when in timearcs mode)
   let forceLayoutLayer = null;  // <g> for force layout rendering
   let layoutTransitionInProgress = false; // Guard against rapid switching
@@ -3034,6 +3034,11 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
 
           // Auto-fit disabled to match main.js detactTimeSeries() behavior
           // setTimeout(() => autoFitArcs(), 100);
+
+          // If force layout is the default mode, transition to it after initial render
+          if (layoutMode === 'force_layout' && !forceLayout) {
+            setTimeout(() => transitionToForceLayout(), 100);
+          }
         }
       });
 
