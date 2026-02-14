@@ -238,10 +238,43 @@ export function renderCircles(layer, binned, options) {
                         const arcD = { src_ip: p.src_ip, dst_ip: p.dst_ip, binned: d.binned, binCenter: d.binCenter, timestamp: d.timestamp, flagType: d.flagType, flags: d.flags };
                         const arcPath = arcPathGenerator(arcD, arcOpts);
                         if (arcPath) {
-                            mainGroup.append('path').attr('class', 'hover-arc').attr('d', arcPath)
-                                .style('stroke', getFlagColor(d))
-                                .style('stroke-width', '2px')
-                                .style('stroke-opacity', 0.8).style('fill', 'none').style('pointer-events', 'none');
+                            const color = getFlagColor(d);
+                            // Draw full arc
+                            const arcEl = mainGroup.append('path').attr('class', 'hover-arc').attr('d', arcPath)
+                                .style('stroke', color).style('stroke-width', '2px')
+                                .style('stroke-opacity', 0.8).style('fill', 'none')
+                                .style('pointer-events', 'none');
+                            // Arrowhead: fixed 12px line at end with marker-end
+                            const pathNode = arcEl.node();
+                            const totalLen = pathNode.getTotalLength();
+                            const ARROW_BACK = 12;
+                            if (totalLen > ARROW_BACK + 5) {
+                                const sp = pathNode.getPointAtLength(totalLen - ARROW_BACK);
+                                const ep = pathNode.getPointAtLength(totalLen);
+                                const colorKey = color.replace(/[^a-zA-Z0-9]/g, '');
+                                const markerId = `arc-arrow-${colorKey}`;
+                                const svgEl = d3.select(mainGroup.node().ownerSVGElement);
+                                let defs = svgEl.select('defs');
+                                if (defs.empty()) defs = svgEl.insert('defs', ':first-child');
+                                if (defs.select(`#${markerId}`).empty()) {
+                                    defs.append('marker')
+                                        .attr('id', markerId)
+                                        .attr('viewBox', '0 0 10 10')
+                                        .attr('refX', 10).attr('refY', 5)
+                                        .attr('markerWidth', 8).attr('markerHeight', 8)
+                                        .attr('markerUnits', 'userSpaceOnUse')
+                                        .attr('orient', 'auto')
+                                      .append('path')
+                                        .attr('d', 'M0,0 L10,5 L0,10 Z')
+                                        .attr('fill', color);
+                                }
+                                mainGroup.append('path').attr('class', 'hover-arc')
+                                    .attr('d', `M${sp.x},${sp.y} L${ep.x},${ep.y}`)
+                                    .style('stroke', color).style('stroke-width', '2px')
+                                    .style('stroke-opacity', 0.8).style('fill', 'none')
+                                    .style('pointer-events', 'none')
+                                    .attr('marker-end', `url(#${markerId})`);
+                            }
                         }
                     });
                     tooltip.style('display', 'block').html(createTooltipHTML(d));
