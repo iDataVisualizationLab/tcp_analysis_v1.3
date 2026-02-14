@@ -3,6 +3,16 @@
 
 import { getFlagType } from '../tcp/flags.js';
 
+// Canonical flag ordering for vertical separation (TCP lifecycle order)
+const FLAG_PHASE_ORDER = [
+    'SYN', 'SYN+ACK',
+    'ACK', 'PSH', 'PSH+ACK',
+    'FIN', 'FIN+ACK',
+    'RST', 'RST+ACK',
+    'OTHER'
+];
+const FLAG_ORDER_MAP = new Map(FLAG_PHASE_ORDER.map((f, i) => [f, i]));
+
 /**
  * Create IP pair key from src and dst IPs (alphabetically ordered for consistency).
  * @param {string} srcIp - Source IP
@@ -37,7 +47,8 @@ export function renderCircles(layer, binned, options) {
         ipPositions,
         createTooltipHTML,
         FLAG_CURVATURE,
-        d3
+        d3,
+        separateFlags = false
     } = options;
 
     if (!layer) return;
@@ -130,6 +141,54 @@ export function renderCircles(layer, binned, options) {
             _idx: idx
         };
     });
+
+    // --- Flag separation: spread co-located flag circles vertically ---
+    if (separateFlags) {
+        // Group by (rounded binCenter, yPosWithOffset) to find overlapping circles
+        const colocated = new Map();
+        for (const d of processed) {
+            const tKey = Math.floor(d.binned && Number.isFinite(d.binCenter) ? d.binCenter : d.timestamp);
+            const key = `${tKey}|${Math.round(d.yPosWithOffset)}`;
+            if (!colocated.has(key)) colocated.set(key, []);
+            colocated.get(key).push(d);
+        }
+        for (const group of colocated.values()) {
+            if (group.length <= 1) continue;
+            // Sort by TCP lifecycle phase order
+            group.sort((a, b) => {
+                const fa = a.flagType || a.flag_type || getFlagType(a);
+                const fb = b.flagType || b.flag_type || getFlagType(b);
+                return (FLAG_ORDER_MAP.get(fa) ?? 99) - (FLAG_ORDER_MAP.get(fb) ?? 99);
+            });
+            // Determine available spread range (collapse-aware)
+            const sample = group[0];
+            const ip = sample.src_ip;
+            const rowHeight = (ipRowHeights && ipRowHeights.get(ip)) || DEFAULT_ROW_HEIGHT;
+            const availableHeight = Math.max(20, rowHeight - 6);
+            let spreadRange;
+            if (sample.ipPairKey === '__collapsed__') {
+                // Collapsed: full row height is available
+                spreadRange = availableHeight;
+            } else {
+                // Expanded: only this pair's sub-row slice
+                const baseY = sample.yPos;
+                const pairInfo = ipPairOrderByRow.get(baseY) || { count: 1 };
+                const pairCount = pairInfo.count;
+                const totalGaps = Math.max(0, pairCount - 1) * SUB_ROW_GAP;
+                spreadRange = Math.max(4, (availableHeight - totalGaps) / pairCount);
+            }
+            const n = group.length;
+            // Step: fit within spread range, capped so circles don't crowd.
+            // Enforce minimum step of 2*RADIUS_MIN so circles never overlap
+            // (may overflow sub-row bounds in expanded mode — acceptable trade-off).
+            const maxRadius = Math.max(...group.map(d => d.binned && d.count > 1 ? rScale(d.count) : RADIUS_MIN));
+            const step = Math.min(spreadRange / n, maxRadius * 2.5);
+            const center = sample.yPosWithOffset;
+            for (let i = 0; i < n; i++) {
+                group[i].yPosWithOffset = center + (i - (n - 1) / 2) * step;
+            }
+        }
+    }
 
     // Sort by radius descending so bigger circles render behind smaller ones
     processed.sort((a, b) => {

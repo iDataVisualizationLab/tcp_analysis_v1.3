@@ -139,7 +139,8 @@ export function computeIPPositioning(packets, options = {}) {
         topPad = TOP_PAD,
         timearcsOrder = null,
         dotRadius = 40,
-        collapsedIPs = null
+        collapsedIPs = null,
+        separateFlags = false
     } = options;
 
     // Count packets per IP
@@ -154,7 +155,8 @@ export function computeIPPositioning(packets, options = {}) {
 
     // Calculate row height for each IP based on its pair count
     // Each pair needs ~12px of vertical space, minimum is base rowGap
-    const SUB_ROW_HEIGHT = 12;
+    // When separateFlags is on, each sub-row needs more space for vertically spread flag circles
+    const SUB_ROW_HEIGHT = separateFlags ? 36 : 12;
     const ipRowHeights = new Map();
 
     ipList.forEach(ip => {

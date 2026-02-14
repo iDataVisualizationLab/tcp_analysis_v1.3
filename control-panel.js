@@ -501,18 +501,7 @@ export function wireControlPanelControls(opts) {
     on('showDataTransfer', 'change', (e) => { if (opts.onToggleDataTransfer) opts.onToggleDataTransfer(e.target.checked); });
     on('showClosing', 'change', (e) => { if (opts.onToggleClosing) opts.onToggleClosing(e.target.checked); });
     on('showGroundTruth', 'change', (e) => { if (opts.onToggleGroundTruth) opts.onToggleGroundTruth(e.target.checked); });
-
-    // Render mode radios
-    const modeCircles = document.getElementById('renderModeCircles');
-    const modeBars = document.getElementById('renderModeBars');
-    if (modeCircles && modeBars && opts.onToggleRenderMode) {
-        const handler = () => {
-            const mode = modeBars.checked ? 'bars' : 'circles';
-            opts.onToggleRenderMode(mode);
-        };
-        modeCircles.addEventListener('change', handler);
-        modeBars.addEventListener('change', handler);
-    }
+    on('separateFlags', 'change', (e) => { if (opts.onToggleSeparateFlags) opts.onToggleSeparateFlags(e.target.checked); });
 }
 
 // Inline SVG arc icon matching the flag color legend in the packet view

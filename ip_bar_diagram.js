@@ -39,7 +39,6 @@ import {
     exportFlowToCSV as exportFlowToCSVFromModule
 } from './src/data/flowReconstruction.js';
 import { renderCircles } from './src/rendering/circles.js';
-import { renderBars, renderMarksForLayer } from './src/rendering/bars.js';
 import { createTooltipHTML } from './src/rendering/tooltip.js';
 import { arcPathGenerator } from './src/rendering/arcPath.js';
 import { createZoomBehavior, applyZoomDomain as applyZoomDomainFromModule } from './src/interaction/zoom.js';
@@ -249,7 +248,8 @@ const state = {
         showClosing: true,       // Toggle for closing phase
         showGroundTruth: false,  // Toggle for ground truth visualization
         useBinning: true,        // User toggle: binning on/off
-        renderMode: 'circles'    // Render mode: 'circles' or 'bars'
+        renderMode: 'circles',   // Render mode (circles only)
+        separateFlags: false     // Spread overlapping flag circles vertically
     },
 
     // Phase 3: TimeArcs Integration (isolated, ~50 refs)
@@ -440,24 +440,6 @@ function syncSubRowHighlights(svgEl, st) {
     });
 }
 
-// Wrapper to call imported renderBars with required options
-function renderBarsWithOptions(layer, binned) {
-    const data = collapseSubRowsBins(binned, state.layout.collapsedIPs);
-    renderBars(layer, data, {
-        xScale,
-        flagColors,
-        globalMaxBinCount,
-        ROW_GAP,
-        ipRowHeights: state.layout.ipRowHeights,
-        ipPairCounts: state.layout.ipPairCounts,
-        ipPositions: state.layout.ipPositions,
-        stableIpPairOrderByRow: state.layout.ipPairOrderByRow,
-        formatBytes,
-        formatTimestamp,
-        d3
-    });
-}
-
 // Wrapper to call imported renderCircles with required options and event handlers
 function renderCirclesWithOptions(layer, binned, rScale) {
     const data = collapseSubRowsBins(binned, state.layout.collapsedIPs);
@@ -477,13 +459,13 @@ function renderCirclesWithOptions(layer, binned, rScale) {
         ipPositions: state.layout.ipPositions,
         createTooltipHTML,
         FLAG_CURVATURE,
-        d3
+        d3,
+        separateFlags: state.ui.separateFlags
     });
 }
 
-// Unified render function - uses local wrappers that call imported modules
+// Unified render function
 function renderMarksForLayerLocal(layer, data, rScale) {
-    if (state.ui.renderMode === 'bars') return renderBarsWithOptions(layer, data);
     return renderCirclesWithOptions(layer, data, rScale);
 }
 
@@ -694,7 +676,17 @@ function initializeBarVisualization() {
         onToggleDataTransfer: (checked) => { state.ui.showDataTransfer = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleClosing: (checked) => { state.ui.showClosing = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleGroundTruth: (checked) => { state.ui.showGroundTruth = checked; const selectedIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value); drawGroundTruthBoxes(selectedIPs); },
-        onToggleBinning: (checked) => { 
+        onToggleSeparateFlags: (checked) => {
+            state.ui.separateFlags = checked;
+            isHardResetInProgress = true;
+            try {
+                visualizeTimeArcs(state.data.filtered);
+                updateTcpFlowPacketsGlobal();
+                drawSelectedFlowArcs();
+                applyInvalidReasonFilter();
+            } catch(e) { logCatchError('toggleSeparateFlags', e); }
+        },
+        onToggleBinning: (checked) => {
             state.ui.useBinning = checked; 
             isHardResetInProgress = true; 
             
@@ -732,20 +724,6 @@ function initializeBarVisualization() {
                 // Fallback to original behavior
                 applyZoomDomain(xScale.domain(), 'program');
             }
-        },
-        onToggleRenderMode: (mode) => {
-            try {
-                state.ui.renderMode = (mode === 'bars') ? 'bars' : 'circles';
-                // Re-render marks in current domain using chosen mode
-                isHardResetInProgress = true;
-                visualizeTimeArcs(state.data.filtered);
-                updateTcpFlowPacketsGlobal();
-                drawSelectedFlowArcs();
-                applyInvalidReasonFilter();
-                // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
-                const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
-                refreshAdaptiveOverview(selIPs).catch(e => console.warn('[RenderMode] Overview refresh failed:', e));
-            } catch (e) { console.warn('Render mode toggle failed', e); }
         }
     });
 
@@ -3613,7 +3591,8 @@ function visualizeTimeArcs(packets) {
         topPad: TOP_PAD,
         timearcsOrder: state.timearcs.ipOrder,
         dotRadius: DOT_RADIUS,
-        collapsedIPs: state.layout.collapsedIPs
+        collapsedIPs: state.layout.collapsedIPs,
+        separateFlags: state.ui.separateFlags
     });
 
     // Apply positioning to state
