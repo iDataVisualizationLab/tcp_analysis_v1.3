@@ -392,6 +392,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
 
   // Cached simulation layout (IP ordering) — only recomputed on new data, not filtered re-renders
   let cachedLayoutResult = null; // { yMap, components, ipToComponent, simNodes, allIps, nodes }
+  let cachedDynamicHeight = null; // SVG height for timearcs mode (deferred when force layout loads first)
 
   // Bifocal display state (timeline focus+context) - ALWAYS ENABLED
   let bifocalEnabled = true;  // Always on by default
@@ -1158,6 +1159,66 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
     setStatus(statusEl, `Force layout: ${_renderAllIps.length} IPs • ${attacks.length} attack groups`);
   }
 
+  // Show force layout directly without animation (used on initial load when force layout is default)
+  function showForceLayoutDirectly() {
+    if (!_renderLinksWithNodes || _renderLinksWithNodes.length === 0) {
+      console.warn('No data available for force layout');
+      layoutMode = 'timearcs';
+      labelMode = 'timearcs';
+      document.getElementById('labelModeTimearcs').checked = true;
+      return;
+    }
+
+    const activeLabelKey = 'attack_group';
+    const colorForAttack = (name) => {
+      return _lookupAttackColor(name) || _lookupAttackGroupColor(name) || DEFAULT_COLOR;
+    };
+
+    // Build initial positions from timearcs Y
+    const drawWidth = width - MARGIN.left - MARGIN.right;
+    const centerX = MARGIN.left + drawWidth / 2;
+    const initialPositions = new Map();
+    for (const ip of _renderAllIps) {
+      const yPos = _renderYScaleLens ? _renderYScaleLens(ip) : MARGIN.top + 50;
+      initialPositions.set(ip, { x: centerX, y: yPos });
+    }
+
+    // Create force layout
+    forceLayout = new ForceNetworkLayout({
+      d3, svg, width, height, margin: MARGIN,
+      colorForAttack, tooltip, showTooltip, hideTooltip
+    });
+    forceLayout.setData(
+      _renderLinksWithNodes, _renderAllIps,
+      _renderIpToComponent, _renderComponents, activeLabelKey
+    );
+    forceLayout.aggregateForTimeRange(null);
+
+    // Hide timearcs elements (arcs, row lines, labels, component toggles)
+    svg.selectAll('path.arc').style('display', 'none');
+    svg.selectAll('.row-line, .ip-label, defs linearGradient')
+      .style('opacity', 0).style('pointer-events', 'none');
+    svg.selectAll('.component-toggle')
+      .style('opacity', 0).style('pointer-events', 'none');
+
+    // Render force layout with live simulation (nodes animate from initial positions)
+    forceLayoutLayer = svg.append('g').attr('class', 'force-layout-layer');
+    forceLayout.render(forceLayoutLayer, initialPositions);
+
+    // Rebuild legend for attack_group mode
+    const attacks = Array.from(new Set(
+      _renderLinksWithNodes.map(l => l[activeLabelKey] || 'normal')
+    )).sort();
+    visibleAttacks = new Set(attacks);
+    currentLabelMode = labelMode;
+    buildLegend(attacks, colorForAttack);
+
+    // Hide compression slider
+    if (compressionSlider) compressionSlider.closest('div').style.display = 'none';
+
+    setStatus(statusEl, `Force layout: ${_renderAllIps.length} IPs • ${attacks.length} attack groups`);
+  }
+
   async function transitionToTimearcs() {
     layoutTransitionInProgress = true;
     setStatus(statusEl, 'Animating to TimeArcs...');
@@ -1257,6 +1318,11 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
 
     // Show compression slider
     if (compressionSlider) compressionSlider.closest('div').style.display = '';
+
+    // Restore timearcs SVG height (may have been deferred during initial force layout load)
+    if (cachedDynamicHeight) {
+      svg.attr('height', cachedDynamicHeight);
+    }
 
     // Refresh timearcs positions to match current bifocal state
     if (updateBifocalVisualizationFn) {
@@ -2515,6 +2581,23 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
     });
     attachLabelHoverHandlers(ipLabels, labelHoverHandler, labelMoveHandler, labelLeaveHandler);
 
+    // When force layout is the default, show it immediately — before the
+    // timearcs simulation which has async awaits that yield to the browser
+    // and would cause a flash of the timearcs layout.
+    if (layoutMode === 'force_layout' && !forceLayout) {
+      _renderLinksWithNodes = linksWithNodes;
+      _renderAllIps = allIps;
+      _renderIpToComponent = ipToComponent;
+      _renderComponents = components;
+      _renderYScaleLens = yScaleLens;
+      _renderXScaleLens = xScaleLens;
+      _renderXStart = xStart;
+      _renderColorForAttack = colorForAttack;
+      _renderTsMin = tsMin;
+      _renderTsMax = tsMax;
+      showForceLayoutDirectly();
+    }
+
     // Phase 1: Run force simulation for natural clustering with component separation
     // Skip simulation on filtered re-renders — reuse cached IP ordering
     const canReuseCachedLayout = isRenderingFilteredData && cachedLayoutResult;
@@ -2792,7 +2875,12 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
 
     // Update SVG height to accommodate all IPs with minimum spacing
     const dynamicHeight = MARGIN.top + dynamicInnerHeight + MARGIN.bottom;
-    svg.attr('height', dynamicHeight);
+    // Only change SVG height if force layout isn't already rendering
+    // (force_network.render sets its own viewport-based height)
+    if (!forceLayout) {
+      svg.attr('height', dynamicHeight);
+    }
+    cachedDynamicHeight = dynamicHeight;
 
     // Create finalY function that returns the computed positions
     const finalY = (ip) => finalYMap.get(ip);
@@ -2829,8 +2917,74 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       }));
 
     const finalSpanData = createSpanData(sortedIps, ipSpans);
-    
-    // Animate everything to timeline (with correct final alignment)
+
+    if (layoutMode === 'force_layout') {
+      // === DIRECT FORCE LAYOUT: Skip timearcs animation, set final positions immediately ===
+
+      // Set arc paths to final positions but hidden
+      arcPaths.attr('d', d => {
+        const xp = xScaleLens(d.minute);
+        const a = finalY(d.sourceNode.name);
+        const b = finalY(d.targetNode.name);
+        if (!isFinite(xp) || !isFinite(a) || !isFinite(b)) return 'M0,0 L0,0';
+        d.source.x = xp; d.source.y = a;
+        d.target.x = xp; d.target.y = b;
+        return linkArc(d);
+      }).style('display', 'none');
+
+      // Set row lines to final positions but hidden
+      rows.selectAll('line')
+        .data(finalSpanData, d => d.ip)
+        .attr('x1', d => d.span ? xScaleLens(d.span.min) : MARGIN.left)
+        .attr('x2', d => d.span ? xScaleLens(d.span.max) : MARGIN.left)
+        .attr('y1', d => finalY(d.ip))
+        .attr('y2', d => finalY(d.ip))
+        .style('opacity', 0)
+        .style('pointer-events', 'none');
+
+      // Set labels to final positions but hidden
+      rows.selectAll('text')
+        .data(sortedIps, d => d)
+        .attr('y', d => finalY(d))
+        .attr('x', d => {
+          const node = ipToNode.get(d);
+          return node && node.xConnected !== undefined ? node.xConnected : MARGIN.left;
+        })
+        .style('opacity', 0)
+        .style('pointer-events', 'none');
+
+      // Hide component toggles
+      if (componentToggles && !componentToggles.empty()) {
+        componentToggles.style('opacity', 0).style('pointer-events', 'none');
+      }
+
+      // Update gradients to final positions
+      linksWithNodes.forEach(d => {
+        svg.select(`#${gradIdForLink(d)}`)
+          .attr('y1', finalY(d.sourceNode.name))
+          .attr('y2', finalY(d.targetNode.name));
+      });
+
+      // Store evenly distributed positions for yScaleLens
+      evenlyDistributedYPositions = new Map();
+      sortedIps.forEach(ip => {
+        evenlyDistributedYPositions.set(ip, finalY(ip));
+      });
+
+      // Update node positions
+      updateNodePositions();
+
+      // Update brush extent
+      if (brushGroup && brush) {
+        brush.extent([[MARGIN.left, MARGIN.top], [width + MARGIN.left, dynamicHeight]]);
+        brushGroup.call(brush);
+      }
+
+      // Generate IP communications list
+      generateIPCommunicationsList(data, linksWithNodes, colorForAttack);
+
+    } else {
+    // === TIMEARCS MODE: Animate everything to timeline ===
     // Update lines - rebind to sorted data
     rows.selectAll('line')
       .data(finalSpanData, d => d.ip)
@@ -2848,11 +3002,11 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
         };
       })
       .style('opacity', 1);
-    
+
     // Update labels - rebind to sorted order to ensure alignment
     const finalIpLabelsSelection = rows.selectAll('text')
       .data(sortedIps, d => d); // Use key function to match by IP string
-    
+
     // Add hover handlers to the selection (they persist through transition)
     finalIpLabelsSelection
       .on('mouseover', function (event, hoveredIp) {
@@ -2931,7 +3085,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
             return componentExpansionState.get(compIdx) === true ? 1 : 0;
           });
       });
-    
+
     // Animate labels to final positions (matching main.js updateTransition)
     // Update node positions first, then animate labels to xConnected positions
     updateNodePositions();
@@ -2955,7 +3109,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
         return componentExpansionState.get(compIdx) === true ? 1 : 0;
       })
       .text(d => d); // Re-apply text in case order changed
-    
+
     // Animate arcs with proper interpolation to final positions (matching main.js pattern)
     arcPaths.transition().duration(1200)
       .attrTween('d', function(d) {
@@ -3003,7 +3157,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
             dd.target.y = b;
             return linkArc(dd);
           });
-          
+
           // Store evenly distributed positions for yScaleLens to use
           evenlyDistributedYPositions = new Map();
           sortedIps.forEach(ip => {
@@ -3034,13 +3188,9 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
 
           // Auto-fit disabled to match main.js detactTimeSeries() behavior
           // setTimeout(() => autoFitArcs(), 100);
-
-          // If force layout is the default mode, transition to it after initial render
-          if (layoutMode === 'force_layout' && !forceLayout) {
-            setTimeout(() => transitionToForceLayout(), 100);
-          }
         }
       });
+    } // end timearcs animation
 
     // Auto-fit arcs function: adaptively space IPs to fit in viewport
     function autoFitArcs() {
@@ -3478,6 +3628,11 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
 
     // Re-initialize resize handler after render completes
     resizeCleanup = setupWindowResizeHandler();
+
+    // Fallback: if force layout is default but wasn't shown earlier (shouldn't happen)
+    if (layoutMode === 'force_layout' && !forceLayout) {
+      showForceLayoutDirectly();
+    }
   }
 
   // Compute nodes array with connectivity metric akin to legacy computeNodes

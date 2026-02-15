@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **dual-visualization network traffic analysis system** built with D3.js v7 for analyzing TCP packet data and attack patterns. It provides two complementary views:
 
-1. **Network TimeArcs** (`attack_timearcs.html` → `attack_timearcs2.js`) - Arc-based visualization of attack events over time with force-directed IP positioning
+1. **Network TimeArcs** (`attack_timearcs.html` → `attack_timearcs.js`) - Arc-based visualization of attack events over time with force-directed IP positioning. **Default mode: Force Layout** (2D force-directed network graph); Timearcs mode (arc-based timeline) available via radio toggle
 2. **TCP Connection Analysis** (`ip_bar_diagram.html` → `ip_bar_diagram.js`) - Detailed packet-level visualization with stacked bar charts and flow reconstruction
 
 ## Running the Application
@@ -35,7 +35,7 @@ The `index.html` redirects to `attack_timearcs.html` by default.
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Main Visualizations                                     │
-│  attack_timearcs2.js (~3900 LOC) - Arc network view      │
+│  attack_timearcs.js (~3900 LOC)  - Arc network view      │
 │  ip_bar_diagram.js (~4600 LOC)   - Packet analysis view  │
 └──────────────────────────┬──────────────────────────────┘
                            │
@@ -164,7 +164,7 @@ The code auto-detects format from `manifest.json` and loads appropriately.
 
 ### Two Main Visualization Files
 
-- `attack_timearcs2.js` (~3900 LOC) - Arc network view with force-directed IP layout
+- `attack_timearcs.js` (~3900 LOC) - Arc network view with force-directed IP layout
 - `ip_bar_diagram.js` (~4600 LOC) - Detailed packet analysis with stacked bars
 
 Both are monolithic files that compose modules from `/src`. They maintain extensive internal state (IP positions, selections, zoom state) and trigger re-renders on state changes.
@@ -369,8 +369,13 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 ### Force-Directed Layout
 
 - **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints
-- **Force Network** (`src/layout/force_network.js`): 2D force layout used as alternate view mode in TimeArcs. Aggregates arc data by IP pair + attack type, renders with D3 force simulation. Supports `precalculate()` for pre-computing positions (used during animated transitions) and `staticStart` rendering
+- **Force Network** (`src/layout/force_network.js`): 2D force layout used as the **default view mode** in TimeArcs. Aggregates arc data by IP pair + attack type, renders with D3 force simulation. Supports `precalculate()` for pre-computing positions (used during animated transitions) and `staticStart` rendering. On data load, the timearcs render completes first, then auto-transitions to force layout via `transitionToForceLayout()`
 - **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
+
+**Network Mode Toggle** (`attack_timearcs.html`):
+- Radio buttons switch between "Timearcs" (arc timeline) and "Force Layout" (2D network graph)
+- Default: Force Layout (`layoutMode = 'force_layout'`, `labelMode = 'force_layout'`)
+- Force layout uses `attack_group` for coloring; Timearcs uses `attack` (finer-grained)
 
 ### Shared Highlight Logic
 

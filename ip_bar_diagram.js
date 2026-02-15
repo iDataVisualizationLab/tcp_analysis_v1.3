@@ -3370,7 +3370,12 @@ function drawFlowDetailArcs(flow, packets) {
         .attr('class', 'flow-detail-arcs')
         .attr('clip-path', 'url(#clip)');
 
-    // Draw simple straight lines between consecutive packets
+    // Arrow size for midpoint arrowheads
+    const arrowLen = 5;
+    const arrowHalfW = 3;
+
+    // Draw lines between consecutive packets
+    // S-curves for packets between different IPs, straight lines for same IP
     for (let i = 0; i < packets.length - 1; i++) {
         const p1 = packets[i];
         const p2 = packets[i + 1];
@@ -3386,16 +3391,59 @@ function drawFlowDetailArcs(flow, packets) {
         const flagType = p1.flagType || 'OTHER';
         const color = flagColors[flagType] || flagColors['OTHER'] || '#999';
 
-        // Draw simple straight line
-        lineGroup.append('line')
+        const sameIP = p1.src_ip === p2.src_ip;
+        let midPtX, midPtY, angle;
+
+        if (sameIP) {
+            // Straight line for same-IP packets
+            lineGroup.append('line')
+                .attr('class', 'flow-detail-arc')
+                .attr('x1', x1)
+                .attr('y1', y1)
+                .attr('x2', x2)
+                .attr('y2', y2)
+                .attr('stroke', color)
+                .attr('stroke-width', 1.5)
+                .attr('stroke-opacity', 0.6);
+
+            midPtX = (x1 + x2) / 2;
+            midPtY = (y1 + y2) / 2;
+            angle = Math.atan2(y2 - y1, x2 - x1);
+        } else {
+            // S-curve for different-IP packets
+            const midX = (x1 + x2) / 2;
+            lineGroup.append('path')
+                .attr('class', 'flow-detail-arc')
+                .attr('d', `M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`)
+                .attr('fill', 'none')
+                .attr('stroke', color)
+                .attr('stroke-width', 1.5)
+                .attr('stroke-opacity', 0.6);
+
+            // Midpoint of cubic bezier at t=0.5: ((x1+x2)/2, (y1+y2)/2)
+            midPtX = midX;
+            midPtY = (y1 + y2) / 2;
+            // Tangent at t=0.5: proportional to (x2-x1, 2*(y2-y1))
+            angle = Math.atan2(2 * (y2 - y1), x2 - x1);
+        }
+
+        // Draw arrowhead triangle at the midpoint
+        const cos = Math.cos(angle);
+        const sin = Math.sin(angle);
+        // Tip of the arrow (forward along tangent)
+        const tipX = midPtX + arrowLen * cos;
+        const tipY = midPtY + arrowLen * sin;
+        // Two base corners (perpendicular to tangent)
+        const baseX1 = midPtX - arrowLen * cos + arrowHalfW * sin;
+        const baseY1 = midPtY - arrowLen * sin - arrowHalfW * cos;
+        const baseX2 = midPtX - arrowLen * cos - arrowHalfW * sin;
+        const baseY2 = midPtY - arrowLen * sin + arrowHalfW * cos;
+
+        lineGroup.append('polygon')
             .attr('class', 'flow-detail-arc')
-            .attr('x1', x1)
-            .attr('y1', y1)
-            .attr('x2', x2)
-            .attr('y2', y2)
-            .attr('stroke', color)
-            .attr('stroke-width', 1.5)
-            .attr('stroke-opacity', 0.6);
+            .attr('points', `${tipX},${tipY} ${baseX1},${baseY1} ${baseX2},${baseY2}`)
+            .attr('fill', color)
+            .attr('fill-opacity', 0.8);
     }
 }
 
