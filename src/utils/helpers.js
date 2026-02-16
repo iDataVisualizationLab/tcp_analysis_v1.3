@@ -1,5 +1,5 @@
 // src/utils/helpers.js
-// Pure utility functions extracted from attack_timearcs.js
+// Pure utility functions extracted from attack-network.js
 
 /**
  * Safely convert value to number.

@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
     <title>TCP Analysis</title>
     <script src="https://d3js.org/d3.v7.min.js"></script>
-    <link rel="stylesheet" href="ip_bar_diagram.css">
+    <link rel="stylesheet" href="tcp-analysis.css">
 </head>
 <body>
     <div id="main-layout">
@@ -74,6 +74,14 @@
                 <button id="collapseAllRows" style="margin-right: 10px;" title="Collapse all IP rows to single lines">Collapse All</button>
                 <button id="expandAllRows" title="Expand all IP rows to show sub-rows">Expand All</button>
             </div>
+            <label style="display: flex; align-items: center; margin-top: 6px; font-size: 12px; cursor: pointer;">
+                <input type="checkbox" id="showSubRowArcs" style="margin-right: 6px;" title="Show permanent arcs connecting IP pair sub-rows">
+                Sub-row Arcs
+            </label>
+            <label style="display: flex; align-items: center; margin-top: 6px; font-size: 12px; cursor: pointer;">
+                <input type="checkbox" id="separateFlags" style="margin-right: 6px;" title="Spread overlapping flag circles vertically">
+                Separate Flags
+            </label>
         </div>
         <div class="control-group collapsible collapsed">
             <label class="collapsible-header"><span>IP Statistics</span><span class="collapse-icon">&#x25BC;</span></label>
@@ -120,23 +128,6 @@
                     </label>
                     <div id="groundTruthStats" style="color: #666; font-size: 11px; margin-top: 5px;">
                         Loading ground truth data...
-                    </div>
-                </div>
-            </div>
-        </div>
-        <div class="control-group collapsible collapsed">
-            <label class="collapsible-header"><span>View Mode</span><span class="collapse-icon">&#x25BC;</span></label>
-            <div class="collapsible-body">
-                <div style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px; font-size: 12px;">
-                    <div style="margin-bottom: 10px;">
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer; margin-bottom: 5px;">
-                            <input type="radio" id="renderModeCircles" name="renderMode" value="circles" checked>
-                            <span>Arc View (Circles)</span>
-                        </label>
-                        <label style="display:flex; align-items:center; gap:8px; cursor:pointer;">
-                            <input type="radio" id="renderModeBars" name="renderMode" value="bars">
-                            <span>Stacked Bars View</span>
-                        </label>
                     </div>
                 </div>
             </div>

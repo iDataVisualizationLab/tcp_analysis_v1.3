@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Network TimeArcs</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
-  <link rel="stylesheet" href="attack_timearcs.css">
+  <link rel="stylesheet" href="attack-network.css">
   <link rel="preconnect" href="https://d3js.org" />
   <link rel="dns-prefetch" href="https://d3js.org" />
 </head>
@@ -19,11 +19,11 @@
       <fieldset style="border:1px solid #dee2e6; padding:4px 8px; border-radius:4px; display:flex; gap:8px; align-items:center;">
         <legend style="font-size:12px; padding:0 4px; font-weight:600;">Network Mode</legend>
         <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
-          <input type="radio" name="labelMode" value="timearcs" id="labelModeTimearcs" checked>
+          <input type="radio" name="labelMode" value="timearcs" id="labelModeTimearcs">
           <span>Timearcs</span>
         </label>
         <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
-          <input type="radio" name="labelMode" value="force_layout" id="labelModeForceLayout">
+          <input type="radio" name="labelMode" value="force_layout" id="labelModeForceLayout" checked>
           <span>Force Layout</span>
         </label>
       </fieldset>
@@ -96,6 +96,6 @@
   </div>
 
   <div id="tooltip" class="tooltip"></div>
-  <script type="module" src="./attack_timearcs.js"></script>
+  <script type="module" src="./attack-network.js"></script>
   </body>
   </html>

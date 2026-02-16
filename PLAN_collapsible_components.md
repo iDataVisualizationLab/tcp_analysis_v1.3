@@ -14,7 +14,7 @@ let componentExpansionState = new Map(); // Default: all collapsed
 ```
 
 ### 2. Modify Spacing Calculation
-**Location**: attack_timearcs.js:2435-2472 (finalYMap calculation)
+**Location**: attack-network.js:2435-2472 (finalYMap calculation)
 
 **Change**:
 ```javascript
@@ -54,7 +54,7 @@ if (components && components.length > 1) {
 ```
 
 ### 3. Conditional Label Visibility
-**Location**: attack_timearcs.js:1290-1292 (after renderIpLabels)
+**Location**: attack-network.js:1290-1292 (after renderIpLabels)
 
 **Add**:
 ```javascript
@@ -246,4 +246,4 @@ if (!isRenderingFilteredData && components && components.length > 1) {
 - Click again to collapse
 
 **Files modified:**
-- attack_timearcs.js (all changes in this one file)
+- attack-network.js (all changes in this one file)

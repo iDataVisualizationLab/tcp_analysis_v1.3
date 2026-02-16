@@ -2,7 +2,7 @@
 // Arc hover and interaction logic
 
 import * as d3 from 'https://cdn.jsdelivr.net/npm/d3@7/+esm';
-import { highlightHoveredLink, unhighlightLinks, getLinkHighlightInfo, highlightEndpointLabels, unhighlightEndpointLabels } from './highlightUtils.js';
+import { highlightHoveredLink, unhighlightLinks, getLinkHighlightInfo, highlightEndpointLabels, unhighlightEndpointLabels, showArcArrowhead, removeArrowheads } from './highlightUtils.js';
 
 /**
  * Create arc hover handler.
@@ -70,6 +70,9 @@ export function createArcHoverHandler(config) {
 
     // Compute shared highlight state
     const { activeIPs: active, attackColor: attackCol } = getLinkHighlightInfo(d, colorForAttack, getLabelMode());
+
+    // Show directional arrowhead at target end of hovered arc
+    showArcArrowhead(svg, this, d, attackCol);
 
     svg.selectAll('.row-line')
       .attr('stroke-opacity', s => s && s.ip && active.has(s.ip) ? 0.8 : 0.1)
@@ -180,6 +183,9 @@ export function createArcLeaveHandler(config) {
 
   return function() {
     hideTooltip();
+
+    // Remove arrowhead overlay
+    removeArrowheads(svg);
 
     // Restore default opacity
     unhighlightLinks(arcPaths, widthScale);

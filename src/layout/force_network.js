@@ -1,7 +1,7 @@
 // src/layout/force_network.js
 // Force-directed 2D network layout — canonical D3 live simulation pattern.
 
-import { highlightHoveredLink, unhighlightLinks, getLinkHighlightInfo, highlightEndpointLabels, unhighlightEndpointLabels } from '../rendering/highlightUtils.js';
+import { highlightHoveredLink, unhighlightLinks, getLinkHighlightInfo, highlightEndpointLabels, unhighlightEndpointLabels, showLineArrowhead, removeArrowheads } from '../rendering/highlightUtils.js';
 
 export class ForceNetworkLayout {
   constructor(opts) {
@@ -435,6 +435,24 @@ export class ForceNetworkLayout {
         // Compute attack color (shared with timearcs)
         const { activeIPs, attackColor } = getLinkHighlightInfo(d, self.colorForAttack);
 
+        // Show directional arrowhead at target end of hovered link
+        const targetNode = d.directionReversed ? d.sourceNode : d.targetNode;
+        const targetR = self._radiusScale(targetNode.degree);
+        const hoveredStrokeW = parseFloat(this.getAttribute('stroke-width')) || 1;
+        const arrowBase = showLineArrowhead(self._centerG, d, attackColor, targetR, hoveredStrokeW);
+
+        // Trim the line so it ends at the arrowhead base (not past it)
+        if (arrowBase) {
+          const isTargetAtX2 = !d.directionReversed;
+          if (isTargetAtX2) {
+            this.setAttribute('x2', arrowBase.baseX);
+            this.setAttribute('y2', arrowBase.baseY);
+          } else {
+            this.setAttribute('x1', arrowBase.baseX);
+            this.setAttribute('y1', arrowBase.baseY);
+          }
+        }
+
         // Highlight source node with attack color, keep destination grey (like link gradient)
         const origSource = d.directionReversed ? d.targetIp : d.sourceIp;
         self._nodeSel.select('circle')
@@ -456,7 +474,25 @@ export class ForceNetworkLayout {
           self.tooltip.style.top = (event.clientY + 10) + 'px';
         }
       })
-      .on('mouseout', function () {
+      .on('mouseout', function (event, d) {
+        // Remove arrowhead overlay
+        removeArrowheads(self._centerG);
+
+        // Restore line endpoints to full node-to-node positions
+        if (d) {
+          const sx = d.sourceNode.x, sy = d.sourceNode.y;
+          const tx = d.targetNode.x, ty = d.targetNode.y;
+          const ddx = tx - sx, ddy = ty - sy;
+          const dlen = Math.sqrt(ddx * ddx + ddy * ddy) || 1;
+          const pOff = d.parallelOffset || 0;
+          const nnx = (-ddy / dlen) * pOff;
+          const nny = (ddx / dlen) * pOff;
+          this.setAttribute('x1', sx + nnx);
+          this.setAttribute('y1', sy + nny);
+          this.setAttribute('x2', tx + nnx);
+          this.setAttribute('y2', ty + nny);
+        }
+
         // Restore links (shared with timearcs)
         unhighlightLinks(self._linkSel, self._linkWidthScale);
 

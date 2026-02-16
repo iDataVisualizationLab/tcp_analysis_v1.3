@@ -1,6 +1,6 @@
 /**
  * Flow Data Handler Module
- * Extracted from ip_bar_diagram.js handleFlowDataLoaded() function
+ * Extracted from tcp-analysis.js handleFlowDataLoaded() function
  * Handles parsing and processing of flow data events
  */
 

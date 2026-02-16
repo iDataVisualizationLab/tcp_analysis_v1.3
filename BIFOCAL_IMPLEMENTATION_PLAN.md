@@ -20,8 +20,8 @@ Unlike fisheye: sharp transitions, no continuous mouse tracking, context is comp
 | `src/scales/bifocal.js` | **CREATE** | Core transform functions, state management |
 | `src/ui/bifocal-handles.js` | **CREATE** | Draggable SVG handles for focus region |
 | `src/scales/distortion.js` | **MODIFY** | Add bifocal branch to `createLensXScale()` |
-| `attack_timearcs.js` | **MODIFY** | Replace lensing state with bifocal state |
-| `attack_timearcs.html` | **MODIFY** | Update UI controls |
+| `attack-network.js` | **MODIFY** | Replace lensing state with bifocal state |
+| `attack-network.html` | **MODIFY** | Update UI controls |
 
 ---
 
@@ -81,7 +81,7 @@ export function createLensXScale(params) {
 }
 ```
 
-### Step 4: Modify `attack_timearcs.js`
+### Step 4: Modify `attack-network.js`
 
 **Replace state variables (lines 303-318):**
 ```javascript
@@ -107,7 +107,7 @@ const xScaleLens = createLensXScale({
 - Arrow up/down: expand/contract focus
 - Shift+B: toggle bifocal mode
 
-### Step 5: Modify `attack_timearcs.html` (lines 36-48)
+### Step 5: Modify `attack-network.html` (lines 36-48)
 
 ```html
 <!-- Replace fisheye button -->

@@ -32,13 +32,13 @@ SVG drag handles module with:
 - Modified `createLensXScale()` to check bifocal first (priority 1)
 - Bifocal > Fisheye > Legacy Lens (in priority order)
 
-### 4. `attack_timearcs.html`
+### 4. `attack-network.html`
 Added UI controls:
 - **Bifocal Toggle Button** - `#bifocalToggle` (Shift+B shortcut)
 - **Compression Slider** - `#compressionSlider` (1-10x range)
 - **Region Indicator** - `#bifocalRegionIndicator` (shows focus bounds)
 
-### 5. `attack_timearcs.js` (~150 LOC added)
+### 5. `attack-network.js` (~150 LOC added)
 Major changes:
 - **State Variables** (lines 320-328): Added `bifocalEnabled`, `bifocalState`, `bifocalHandles`
 - **DOM References** (lines 42-46): Added bifocal control element references

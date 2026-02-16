@@ -9,8 +9,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **dual-visualization network traffic analysis system** built with D3.js v7 for analyzing TCP packet data and attack patterns. It provides two complementary views:
 
-1. **Network TimeArcs** (`attack_timearcs.html` → `attack_timearcs2.js`) - Arc-based visualization of attack events over time with force-directed IP positioning
-2. **TCP Connection Analysis** (`ip_bar_diagram.html` → `ip_bar_diagram.js`) - Detailed packet-level visualization with stacked bar charts and flow reconstruction
+1. **Network TimeArcs** (`attack-network.html` → `attack-network.js`) - Arc-based visualization of attack events over time with force-directed IP positioning. **Default mode: Force Layout** (2D force-directed network graph); Timearcs mode (arc-based timeline) available via radio toggle
+2. **TCP Connection Analysis** (`tcp-analysis.html` → `tcp-analysis.js`) - Detailed packet-level visualization with stacked bar charts and flow reconstruction
 
 ## Running the Application
 
@@ -24,19 +24,19 @@ python -m http.server 8000
 npx serve .
 
 # Then open:
-# http://localhost:8000/attack_timearcs.html  (TimeArcs view)
-# http://localhost:8000/ip_bar_diagram.html   (TCP Analysis view)
+# http://localhost:8000/attack-network.html  (TimeArcs view)
+# http://localhost:8000/tcp-analysis.html   (TCP Analysis view)
 ```
 
-The `index.html` redirects to `attack_timearcs.html` by default.
+The `index.html` redirects to `attack-network.html` by default.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Main Visualizations                                     │
-│  attack_timearcs2.js (~3900 LOC) - Arc network view      │
-│  ip_bar_diagram.js (~4600 LOC)   - Packet analysis view  │
+│  attack-network.js (~3900 LOC)   - Arc network view      │
+│  tcp-analysis.js (~4600 LOC)     - Packet analysis view  │
 └──────────────────────────┬──────────────────────────────┘
                            │
 ┌──────────────────────────┴──────────────────────────────┐
@@ -84,7 +84,7 @@ The `index.html` redirects to `attack_timearcs.html` by default.
 5. **Resolution Management** → `resolution-manager.js` handles zoom-level data with LRU caching
 6. **Rendering** → stacked bars by flag type, arcs between IPs
 
-**Flow Data for Overview Chart** (ip_bar_diagram.js:1703-1757):
+**Flow Data for Overview Chart** (tcp-analysis.js:1703-1757):
 - When IPs are selected, `updateIPFilter()` is called (async function)
 - Uses adaptive multi-resolution loader (`flow_bins_index.json`) for efficient overview rendering
 - Falls back to `flow_bins.json` or chunk loading if multi-resolution not available
@@ -164,8 +164,8 @@ The code auto-detects format from `manifest.json` and loads appropriately.
 
 ### Two Main Visualization Files
 
-- `attack_timearcs2.js` (~3900 LOC) - Arc network view with force-directed IP layout
-- `ip_bar_diagram.js` (~4600 LOC) - Detailed packet analysis with stacked bars
+- `attack-network.js` (~3900 LOC) - Arc network view with force-directed IP layout
+- `tcp-analysis.js` (~4600 LOC) - Detailed packet analysis with stacked bars
 
 Both are monolithic files that compose modules from `/src`. They maintain extensive internal state (IP positions, selections, zoom state) and trigger re-renders on state changes.
 
@@ -177,7 +177,7 @@ The `overview_chart.js` module (~900 LOC) provides:
 - Legend integration for filtering by invalid reason/close type
 
 **Current Implementation** (Multi-resolution adaptive loading):
-- `ip_bar_diagram.js` initializes `AdaptiveOverviewLoader` from `flow_bins_index.json`
+- `tcp-analysis.js` initializes `AdaptiveOverviewLoader` from `flow_bins_index.json`
 - Loader selects appropriate resolution based on visible time range (hour → 10min → 1min)
 - Filters pre-aggregated flow bins by selected IP pairs
 - Creates synthetic flows from bin data for overview chart
@@ -311,7 +311,7 @@ The `csv-resolution-manager.js` handles zoom-level dependent packet data loading
 
 Coarse resolutions (hours, minutes, seconds) use single-file `data.csv` files loaded at initialization. Fine resolutions (100ms, 10ms, 1ms, raw) use chunked files loaded on-demand with LRU caching.
 
-**Resolution Selection** (`getResolutionForVisibleRange()` in `ip_bar_diagram.js`):
+**Resolution Selection** (`getResolutionForVisibleRange()` in `tcp-analysis.js`):
 - **Auto mode**: Threshold-based — picks the coarsest level whose threshold the visible range exceeds
 - **Manual override**: Dropdown selects an explicit resolution level. The selected level is used directly. When the user zooms in past the next finer level's threshold, it auto-refines one step at a time (e.g., minutes → seconds → 100ms → ...). Never goes coarser than the selected level.
 - The dropdown labels use "+" suffix (e.g., "Minutes+") to indicate zoom-to-finer behavior
@@ -369,8 +369,22 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 ### Force-Directed Layout
 
 - **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints
-- **Force Network** (`src/layout/force_network.js`): 2D force layout used as alternate view mode in TimeArcs. Aggregates arc data by IP pair + attack type, renders with D3 force simulation. Supports `precalculate()` for pre-computing positions (used during animated transitions) and `staticStart` rendering
+- **Force Network** (`src/layout/force_network.js`): 2D force layout used as the **default view mode** in TimeArcs. Aggregates arc data by IP pair + attack type, renders with D3 force simulation. Supports `precalculate()` for pre-computing positions (used during animated transitions) and `staticStart` rendering. On data load, the timearcs render completes first, then auto-transitions to force layout via `transitionToForceLayout()`
 - **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
+
+**Network Mode Toggle** (`attack-network.html`):
+- Radio buttons switch between "Timearcs" (arc timeline) and "Force Layout" (2D network graph)
+- Default: Force Layout (`layoutMode = 'force_layout'`, `labelMode = 'force_layout'`)
+- Force layout uses `attack_group` for coloring; Timearcs uses `attack` (finer-grained)
+
+### Brush Selection System (attack-network.js)
+
+Drag-to-brush selection allows users to select arcs/nodes for analysis and export to tcp-analysis:
+- **Persistent selections** (`persistentSelections[]`): Stored at module level as data objects with `{id, timeBounds, ips, arcs, timeRange}`. Survive resize/filter re-renders.
+- **`multiSelectionsGroup`**: SVG `<g>` holding selection visuals. Must be reset to `null` in `render()` cleanup (after `svg.selectAll('*').remove()`) so `setupDragToBrush()` creates a fresh DOM group. Forgetting this causes new selections to append to a detached element.
+- **`computeSelectionBounds()`**: Recomputes selection rectangle pixel bounds from stored IP names using current scales/node positions (not stale pixel values). Shared by `createPersistentSelectionVisual` and `updatePersistentSelectionVisuals`.
+- **`redrawAllPersistentSelections()` / `redrawPersistentSelectionsFn`**: Clears and re-creates all selection DOM elements. Called after positions finalize (timearcs animation end, force layout setup, component layout change) and from the force layout resize handler.
+- **Resize behavior**: Timearcs mode calls `render()` which preserves `persistentSelections` and redraws after animation. Force layout mode bypasses `render()` and calls `redrawPersistentSelectionsFn` directly.
 
 ### Shared Highlight Logic
 

@@ -3,6 +3,16 @@
 
 import { getFlagType } from '../tcp/flags.js';
 
+// Canonical flag ordering for vertical separation (TCP lifecycle order)
+const FLAG_PHASE_ORDER = [
+    'SYN', 'SYN+ACK',
+    'ACK', 'PSH', 'PSH+ACK',
+    'FIN', 'FIN+ACK',
+    'RST', 'RST+ACK',
+    'OTHER'
+];
+const FLAG_ORDER_MAP = new Map(FLAG_PHASE_ORDER.map((f, i) => [f, i]));
+
 /**
  * Create IP pair key from src and dst IPs (alphabetically ordered for consistency).
  * @param {string} srcIp - Source IP
@@ -37,7 +47,8 @@ export function renderCircles(layer, binned, options) {
         ipPositions,
         createTooltipHTML,
         FLAG_CURVATURE,
-        d3
+        d3,
+        separateFlags = false
     } = options;
 
     if (!layer) return;
@@ -131,6 +142,54 @@ export function renderCircles(layer, binned, options) {
         };
     });
 
+    // --- Flag separation: spread co-located flag circles vertically ---
+    if (separateFlags) {
+        // Group by (rounded binCenter, yPosWithOffset) to find overlapping circles
+        const colocated = new Map();
+        for (const d of processed) {
+            const tKey = Math.floor(d.binned && Number.isFinite(d.binCenter) ? d.binCenter : d.timestamp);
+            const key = `${tKey}|${Math.round(d.yPosWithOffset)}`;
+            if (!colocated.has(key)) colocated.set(key, []);
+            colocated.get(key).push(d);
+        }
+        for (const group of colocated.values()) {
+            if (group.length <= 1) continue;
+            // Sort by TCP lifecycle phase order
+            group.sort((a, b) => {
+                const fa = a.flagType || a.flag_type || getFlagType(a);
+                const fb = b.flagType || b.flag_type || getFlagType(b);
+                return (FLAG_ORDER_MAP.get(fa) ?? 99) - (FLAG_ORDER_MAP.get(fb) ?? 99);
+            });
+            // Determine available spread range (collapse-aware)
+            const sample = group[0];
+            const ip = sample.src_ip;
+            const rowHeight = (ipRowHeights && ipRowHeights.get(ip)) || DEFAULT_ROW_HEIGHT;
+            const availableHeight = Math.max(20, rowHeight - 6);
+            let spreadRange;
+            if (sample.ipPairKey === '__collapsed__') {
+                // Collapsed: full row height is available
+                spreadRange = availableHeight;
+            } else {
+                // Expanded: only this pair's sub-row slice
+                const baseY = sample.yPos;
+                const pairInfo = ipPairOrderByRow.get(baseY) || { count: 1 };
+                const pairCount = pairInfo.count;
+                const totalGaps = Math.max(0, pairCount - 1) * SUB_ROW_GAP;
+                spreadRange = Math.max(4, (availableHeight - totalGaps) / pairCount);
+            }
+            const n = group.length;
+            // Step: fit within spread range, capped so circles don't crowd.
+            // Enforce minimum step of 2*RADIUS_MIN so circles never overlap
+            // (may overflow sub-row bounds in expanded mode — acceptable trade-off).
+            const maxRadius = Math.max(...group.map(d => d.binned && d.count > 1 ? rScale(d.count) : RADIUS_MIN));
+            const step = Math.min(spreadRange / n, maxRadius * 2.5);
+            const center = sample.yPosWithOffset;
+            for (let i = 0; i < n; i++) {
+                group[i].yPosWithOffset = center + (i - (n - 1) / 2) * step;
+            }
+        }
+    }
+
     // Sort by radius descending so bigger circles render behind smaller ones
     processed.sort((a, b) => {
         const rA = a.binned && a.count > 1 ? rScale(a.count) : RADIUS_MIN;
@@ -179,10 +238,43 @@ export function renderCircles(layer, binned, options) {
                         const arcD = { src_ip: p.src_ip, dst_ip: p.dst_ip, binned: d.binned, binCenter: d.binCenter, timestamp: d.timestamp, flagType: d.flagType, flags: d.flags };
                         const arcPath = arcPathGenerator(arcD, arcOpts);
                         if (arcPath) {
-                            mainGroup.append('path').attr('class', 'hover-arc').attr('d', arcPath)
-                                .style('stroke', getFlagColor(d))
-                                .style('stroke-width', '2px')
-                                .style('stroke-opacity', 0.8).style('fill', 'none').style('pointer-events', 'none');
+                            const color = getFlagColor(d);
+                            // Draw full arc
+                            const arcEl = mainGroup.append('path').attr('class', 'hover-arc').attr('d', arcPath)
+                                .style('stroke', color).style('stroke-width', '2px')
+                                .style('stroke-opacity', 0.8).style('fill', 'none')
+                                .style('pointer-events', 'none');
+                            // Arrowhead: fixed 12px line at end with marker-end
+                            const pathNode = arcEl.node();
+                            const totalLen = pathNode.getTotalLength();
+                            const ARROW_BACK = 12;
+                            if (totalLen > ARROW_BACK + 5) {
+                                const sp = pathNode.getPointAtLength(totalLen - ARROW_BACK);
+                                const ep = pathNode.getPointAtLength(totalLen);
+                                const colorKey = color.replace(/[^a-zA-Z0-9]/g, '');
+                                const markerId = `arc-arrow-${colorKey}`;
+                                const svgEl = d3.select(mainGroup.node().ownerSVGElement);
+                                let defs = svgEl.select('defs');
+                                if (defs.empty()) defs = svgEl.insert('defs', ':first-child');
+                                if (defs.select(`#${markerId}`).empty()) {
+                                    defs.append('marker')
+                                        .attr('id', markerId)
+                                        .attr('viewBox', '0 0 10 10')
+                                        .attr('refX', 10).attr('refY', 5)
+                                        .attr('markerWidth', 8).attr('markerHeight', 8)
+                                        .attr('markerUnits', 'userSpaceOnUse')
+                                        .attr('orient', 'auto')
+                                      .append('path')
+                                        .attr('d', 'M0,0 L10,5 L0,10 Z')
+                                        .attr('fill', color);
+                                }
+                                mainGroup.append('path').attr('class', 'hover-arc')
+                                    .attr('d', `M${sp.x},${sp.y} L${ep.x},${ep.y}`)
+                                    .style('stroke', color).style('stroke-width', '2px')
+                                    .style('stroke-opacity', 0.8).style('fill', 'none')
+                                    .style('pointer-events', 'none')
+                                    .attr('marker-end', `url(#${markerId})`);
+                            }
                         }
                     });
                     tooltip.style('display', 'block').html(createTooltipHTML(d));
@@ -203,4 +295,7 @@ export function renderCircles(layer, binned, options) {
                 .attr('cy', d => d.yPosWithOffset)
                 .style('cursor', 'pointer')
         );
+
+    // Return processed data so callers can access final positions (with flag separation)
+    return processed;
 }

@@ -247,17 +247,3 @@ export function renderBars(layer, binned, options) {
 
     stackJoin.exit().remove();
 }
-
-/**
- * Unified render function - dispatches to bars or circles.
- * @param {Object} layer - D3 selection
- * @param {Array} data - Binned data
- * @param {Object} options - Must include renderMode and renderCircles function
- */
-export function renderMarksForLayer(layer, data, options) {
-    if (options.renderMode === 'bars') {
-        return renderBars(layer, data, options);
-    }
-    // Call the passed renderCircles function for circle mode
-    return options.renderCircles(layer, data, options);
-}

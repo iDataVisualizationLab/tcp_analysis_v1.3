@@ -75,3 +75,138 @@ export function unhighlightEndpointLabels(labelSelection) {
     .style('font-size', null)
     .attr('font-weight', null);
 }
+
+// --- Directional arrowhead on hover ---
+// Draws a filled triangle at the target end of the hovered arc/line,
+// oriented along the tangent so it follows the curve naturally.
+
+/**
+ * Compute a filled-triangle arrowhead polygon from two sample points.
+ * p1 is "behind" (further from target), p2 is at the target.
+ * Returns SVG polygon points string.
+ */
+function arrowTriangle(p1x, p1y, p2x, p2y, size, minHalfW = 0) {
+  const dx = p2x - p1x;
+  const dy = p2y - p1y;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const ux = dx / len; // unit vector toward target
+  const uy = dy / len;
+  const px = -uy;      // perpendicular
+  const py = ux;
+
+  const halfW = Math.max(size * 0.55, minHalfW);
+  // base at p2 (arc endpoint), tip extends beyond
+  const tipX = p2x + ux * size;
+  const tipY = p2y + uy * size;
+  const blX = p2x + px * halfW;
+  const blY = p2y + py * halfW;
+  const brX = p2x - px * halfW;
+  const brY = p2y - py * halfW;
+  return `${tipX},${tipY} ${blX},${blY} ${brX},${brY}`;
+}
+
+/**
+ * Show directional arrowhead on a hovered timearcs arc path.
+ * The arc is a semicircle between vertically-aligned points so the tangent
+ * at both endpoints is exactly horizontal. The arrowhead points LEFT
+ * (traffic always arrives from the rightward-bulging arc).
+ * @param {d3.Selection} container - SVG selection to append the overlay to
+ * @param {Element} pathElement - The hovered path DOM element
+ * @param {Object} datum - Link datum with source/target node objects
+ * @param {string} color - Arrow fill color
+ */
+export function showArcArrowhead(container, pathElement, datum, color) {
+  removeArrowheads(container);
+
+  const totalLen = pathElement.getTotalLength();
+  if (totalLen < 1) return;
+
+  const srcY = datum.source?.y ?? datum.sourceNode?.y ?? 0;
+  const tgtY = datum.target?.y ?? datum.targetNode?.y ?? 0;
+  const targetAtEnd = srcY < tgtY;
+
+  // Get the target endpoint position on the arc
+  const ep = targetAtEnd
+    ? pathElement.getPointAtLength(totalLen)
+    : pathElement.getPointAtLength(0);
+
+  const ARROW_SIZE = 10;
+  const g = container.append('g').attr('class', 'hover-arrowhead-group')
+    .style('pointer-events', 'none');
+
+  // Horizontal LEFT direction: p1 is 1px to the right of ep, p2 is ep
+  g.append('polygon')
+    .attr('points', arrowTriangle(ep.x + 1, ep.y, ep.x, ep.y, ARROW_SIZE))
+    .attr('fill', color)
+    .attr('opacity', 0.85);
+}
+
+/**
+ * Show directional arrowhead on a hovered force-network line.
+ * Computes direction from node positions, respecting parallel offset and traffic direction.
+ * @param {d3.Selection} container - Group to append the overlay to (e.g. _centerG)
+ * @param {Object} datum - Link datum with sourceNode, targetNode, parallelOffset, directionReversed
+ * @param {string} color - Arrow fill color
+ * @param {number} [targetRadius=0] - Radius of target node circle; arrow tip placed at edge
+ * @param {number} [strokeWidth=0] - Hovered link stroke width; arrow scales to be wider
+ * @returns {{ baseX: number, baseY: number } | null} Arrowhead base position for line trimming
+ */
+export function showLineArrowhead(container, datum, color, targetRadius = 0, strokeWidth = 0) {
+  removeArrowheads(container);
+
+  const sx = datum.sourceNode.x, sy = datum.sourceNode.y;
+  const tx = datum.targetNode.x, ty = datum.targetNode.y;
+
+  // Parallel offset (same calculation as _ticked)
+  const dx = tx - sx, dy = ty - sy;
+  const len = Math.sqrt(dx * dx + dy * dy) || 1;
+  const pOff = datum.parallelOffset || 0;
+  const nx = (-dy / len) * pOff;
+  const ny = (dx / len) * pOff;
+
+  // Arrow follows original traffic direction
+  let fromX, fromY, toX, toY;
+  if (datum.directionReversed) {
+    fromX = tx + nx; fromY = ty + ny;
+    toX = sx + nx; toY = sy + ny;
+  } else {
+    fromX = sx + nx; fromY = sy + ny;
+    toX = tx + nx; toY = ty + ny;
+  }
+
+  const dlen = Math.sqrt((toX - fromX) ** 2 + (toY - fromY) ** 2);
+  if (dlen < 1) return null;
+
+  const ARROW_SIZE = Math.max(10, strokeWidth * 1.5);
+
+  // Pull back the target point so the arrow TIP lands at the circle edge.
+  // arrowTriangle places the base at p2 and extends the tip ARROW_SIZE beyond,
+  // so we pull back by (targetRadius + ARROW_SIZE).
+  if (targetRadius > 0) {
+    const ux = (toX - fromX) / dlen;
+    const uy = (toY - fromY) / dlen;
+    toX -= ux * (targetRadius + ARROW_SIZE);
+    toY -= uy * (targetRadius + ARROW_SIZE);
+  }
+
+  // Ensure arrow width is at least as wide as the stroke
+  const minHalfW = strokeWidth > 0 ? strokeWidth / 2 + 2 : 0;
+
+  const g = container.append('g').attr('class', 'hover-arrowhead-group')
+    .style('pointer-events', 'none');
+
+  g.append('polygon')
+    .attr('points', arrowTriangle(fromX, fromY, toX, toY, ARROW_SIZE, minHalfW))
+    .attr('fill', color)
+    .attr('opacity', 0.85);
+
+  return { baseX: toX, baseY: toY };
+}
+
+/**
+ * Remove arrowhead overlays from a container.
+ * @param {d3.Selection} container - SVG or group selection
+ */
+export function removeArrowheads(container) {
+  container.selectAll('.hover-arrowhead-group').remove();
+}
