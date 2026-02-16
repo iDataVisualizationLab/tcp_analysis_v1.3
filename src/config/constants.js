@@ -72,7 +72,7 @@ export const REORDER_WINDOW_MS = 500;
 
 // Default TCP flag colors
 export const DEFAULT_FLAG_COLORS = {
-    'SYN': '#e74c3c',
+    'SYN': '#757575',
     'SYN+ACK': '#f39c12',
     'ACK': '#27ae60',
     'FIN': '#8e44ad',
@@ -80,7 +80,7 @@ export const DEFAULT_FLAG_COLORS = {
     'RST': '#34495e',
     'PSH+ACK': '#3498db',
     'RST+ACK': '#c0392b',
-    'OTHER': '#bdc3c7'
+    'OTHER': '#2b2b2b'
 };
 
 // Flag curvature for arc paths (pixels of horizontal offset)

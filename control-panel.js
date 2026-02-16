@@ -556,7 +556,11 @@ export function updateFlagStats(packets, classifyFlags, flagColors) {
     const flagCounts = {};
     packets.forEach(packet => {
         // Use pre-classified flag_type/flagType for binned data, fall back to classifyFlags for raw packets
-        const ft = packet.flagType || packet.flag_type || classifyFlags(packet.flags);
+        let ft = packet.flagType || packet.flag_type || classifyFlags(packet.flags);
+        // Group uncommon flag combinations into OTHER for cleaner stats display
+        if (!flagColors[ft]) {
+            ft = 'OTHER';
+        }
         const count = packet.count || 1;
         flagCounts[ft] = (flagCounts[ft] || 0) + count;
     });

@@ -1,5 +1,5 @@
 {
-  "SYN": "#e41a1c",
+  "SYN": "#757575",
   "SYN+ACK": "#ff7f00",
   "ACK": "#b2df8a",
   "PSH": "#157256",
@@ -8,5 +8,5 @@
   "FIN+ACK": "#4aa3e0",
   "RST": "#7b3294",
   "RST+ACK": "#c69bd9",
-  "OTHER": "#666666"
+  "OTHER": "#2b2b2b"
 }
