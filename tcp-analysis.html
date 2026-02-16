@@ -13,6 +13,13 @@
         <div id="chart-container">
             <div id="chart"></div>
             <div id="loadingMessage"></div>
+            <!-- CSV/data loading progress bar (driven by control-panel.js) -->
+            <div id="csvProgress" style="display: none;">
+                <div id="csvProgressLabel">Loading...</div>
+                <div class="csv-progress-track">
+                    <div id="csvProgressBar" class="csv-progress-bar"></div>
+                </div>
+            </div>
         </div>
         <!-- Bottom overlay: main chart timeline axis + size/flag legends -->
         <div id="chart-bottom-overlay">
