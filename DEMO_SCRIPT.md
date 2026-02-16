@@ -9,10 +9,10 @@
 
 ---
 
-## ACT 1: Overview in TimeArcs (attack_timearcs.html)
+## ACT 1: Overview in TimeArcs (attack-network.html)
 
 ### Scene 1.1 — Cold Start & Data Loading
-**URL:** `http://localhost:8000/attack_timearcs.html`
+**URL:** `http://localhost:8000/attack-network.html`
 
 1. Page loads with "Waiting for data..." status
 2. The folder-based dataset auto-loads from `packets_data/attack_flows_day1to5/`
@@ -58,7 +58,7 @@
 
 ### Scene 2.2 — Opening TCP Analysis
 1. Click the **"View Details"** button on the selection box
-2. A new tab opens: `ip_bar_diagram.html?fromSelection=...`
+2. A new tab opens: `tcp-analysis.html?fromSelection=...`
 3. The TCP Analysis view auto-loads with:
    - Pre-selected IPs from the TimeArcs selection
    - Zoomed to the selected time range
@@ -69,7 +69,7 @@
 
 ## ACT 3: TCP Analysis — Packet-Level Inspection
 
-### Scene 3.1 — Orientation in ip_bar_diagram
+### Scene 3.1 — Orientation in tcp-analysis
 1. Point out the **main chart** — arcs/circles showing individual packets between IP pairs
 2. Point out the **sidebar** — IP selection checkboxes, flag stats, IP stats
 3. Point out the **overview chart** at the bottom (stacked bars showing flow health)
@@ -246,7 +246,7 @@
 - **Mouse movements:** Slow and deliberate. Pause on tooltips for readability.
 - **Zooming:** Zoom in steps so viewers can track the transition.
 - **Narration pace:** Pause after each visual change to let viewers absorb.
-- **Fallback:** If the `fromSelection` auto-load fails (popup blocker), manually navigate to `ip_bar_diagram.html` and select the same IPs via the sidebar checkboxes.
+- **Fallback:** If the `fromSelection` auto-load fails (popup blocker), manually navigate to `tcp-analysis.html` and select the same IPs via the sidebar checkboxes.
 - **IP addresses to feature:** `172.28.4.7` is a frequent DDoS target and appears in many flows — good anchor IP for the demo.
 
 ---

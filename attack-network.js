@@ -234,8 +234,8 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
     baseDataPath: './',  // Base path for data files
     ipMapPath: './full_ip_map.json',  // Default IP map path
     autoDetected: false,
-    // Path to multi-resolution data for ip_bar_diagram detail view
-    // This should point to a folder with manifest.json compatible with ip_bar_diagram
+    // Path to multi-resolution data for tcp-analysis detail view
+    // This should point to a folder with manifest.json compatible with tcp-analysis
     detailViewDataPath: 'packets_data/attack_packets_day1to5'
   };
   
@@ -2415,7 +2415,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       }
     };
 
-    // Open ip_bar_diagram.html in a new tab with the selected data
+    // Open tcp-analysis.html in a new tab with the selected data
     const openDetailsInNewTab = (selection) => {
       // Use the passed selection or fall back to current selection (for backwards compatibility)
       const selArcs = selection ? selection.arcs : selectedArcs;
@@ -2478,7 +2478,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       // Generate unique key for this selection to support multiple tabs
       const storageKey = `timearcs_brush_selection_${Date.now()}_${selId}`;
 
-      // Prepare data for ip_bar_diagram
+      // Prepare data for tcp-analysis
       // Filter currentSortedIps to only include selected IPs, preserving vertical order
       const selIpsSet = selIps instanceof Set ? selIps : new Set(selIps);
       const orderedSelectedIps = currentSortedIps.filter(ip => selIpsSet.has(ip));
@@ -2495,7 +2495,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       const filePaths = (datasetConfig.sets || []).map(s => s.filePath).filter(Boolean);
 
       const selectionData = {
-        source: 'attack_timearcs_brush_selection',
+        source: 'attack_network_brush_selection',
         timestamp: Date.now(),
         selectionId: selId,
         selection: {
@@ -2515,7 +2515,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
         dataFiles: dataFiles,
         filePaths: filePaths,
         baseDataPath: datasetConfig.baseDataPath || './',
-        // Path to multi-resolution data for ip_bar_diagram (compatible format)
+        // Path to multi-resolution data for tcp-analysis (compatible format)
         detailViewDataPath: datasetConfig.detailViewDataPath || null,
         ipMapPath: datasetConfig.ipMapPath || null
       };
@@ -2525,7 +2525,7 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       // and doesn't persist when opening a new tab with window.open()
       try {
         localStorage.setItem(storageKey, JSON.stringify(selectionData));
-        console.log(`Stored brush selection #${selId} data for ip_bar_diagram:`, selectionData);
+        console.log(`Stored brush selection #${selId} data for tcp-analysis:`, selectionData);
         console.log(`localStorage key: ${storageKey}`);
       } catch (e) {
         console.error('Failed to store selection data:', e);
@@ -2533,12 +2533,12 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
         return;
       }
 
-      // Open ip_bar_diagram in a new tab with the storage key as parameter
+      // Open tcp-analysis in a new tab with the storage key as parameter
       // The page will read the fromSelection parameter to get data from localStorage
       const encodedKey = encodeURIComponent(storageKey);
-      const newTabUrl = `./ip_bar_diagram.html?fromSelection=${encodedKey}`;
+      const newTabUrl = `./tcp-analysis.html?fromSelection=${encodedKey}`;
 
-      console.log(`Opening ip_bar_diagram with URL: ${newTabUrl}`);
+      console.log(`Opening tcp-analysis with URL: ${newTabUrl}`);
       console.log(`Full URL will be: ${new URL(newTabUrl, window.location.href).href}`);
 
       const newWindow = window.open(newTabUrl, '_blank');

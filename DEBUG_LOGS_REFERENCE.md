@@ -14,7 +14,7 @@ This document catalogs the debug console.log statements that were added during d
 
 ## Debug Logs Removed
 
-### ip_bar_diagram.js
+### tcp-analysis.js
 
 #### Lines 531-568: Overview Chart Wrapper Function
 **Purpose**: Track IP filtering being passed to flow loaders
@@ -166,9 +166,9 @@ If similar issues arise in the future, re-enable these logs by:
 
 ## Related Files
 
-- `ip_bar_diagram.js` - Main visualization, HTTP-based loading
+- `tcp-analysis.js` - Main visualization, HTTP-based loading
 - `folder_integration.js` - File System API-based loading
-- `attack_timearcs2.js` - Generates selection data for detail view
+- `attack-network.js` - Generates selection data for detail view
 - `overview_chart.js` - Consumes filtered flows for stacked chart
 
 ## Data Format Notes

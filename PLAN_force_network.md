@@ -42,7 +42,7 @@ Add a true force-directed network graph view (`force_network.js`) that users swi
 
 ## Modified Files
 
-### `attack_timearcs.js`
+### `attack-network.js`
 
 1. **Add import** (top, with existing imports):
    ```js
@@ -62,7 +62,7 @@ Add a true force-directed network graph view (`force_network.js`) that users swi
 
 5. **Guard in resize handler** (~line 457): if `isForceNetworkActive()`, skip TimeArcs resize logic
 
-### `attack_timearcs.css`
+### `attack-network.css`
 
 Add classes for network elements:
 - `.network-edge` - fill none, pointer-events stroke, opacity transition
@@ -71,14 +71,14 @@ Add classes for network elements:
 - `.network-node.dimmed`, `.network-edge.dimmed` - low opacity
 - `.network-edge.highlighted` - high opacity
 
-### `attack_timearcs.html`
+### `attack-network.html`
 
 No structural changes required. Optionally rename "Force Layout" label to "Network Graph" for clarity.
 
 ## Verification
 
 1. Serve directory: `python -m http.server 8000`
-2. Open `http://localhost:8000/attack_timearcs.html`
+2. Open `http://localhost:8000/attack-network.html`
 3. Load CSV data (or let default CSV load)
 4. Verify TimeArcs renders normally
 5. Click "Force Layout" / "Network Graph" radio button

@@ -11,8 +11,8 @@ async function loadVisualizationModule() {
         // Add cache-busting parameter to force reload
         const cacheBust = `?v=${Date.now()}`;
 
-        // Load the bar diagram module (it handles both arcs and bars internally)
-        visualizationModule = await import(`./ip_bar_diagram.js${cacheBust}`);
+        // Load the tcp-analysis module (it handles both arcs and bars internally)
+        visualizationModule = await import(`./tcp-analysis.js${cacheBust}`);
 
         console.log('Successfully loaded visualization module');
 

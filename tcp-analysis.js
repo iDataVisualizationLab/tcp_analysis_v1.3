@@ -249,7 +249,8 @@ const state = {
         showGroundTruth: false,  // Toggle for ground truth visualization
         useBinning: true,        // User toggle: binning on/off
         renderMode: 'circles',   // Render mode (circles only)
-        separateFlags: false     // Spread overlapping flag circles vertically
+        separateFlags: false,    // Spread overlapping flag circles vertically
+        showSubRowArcs: false    // Show permanent ghost arcs for IP pair sub-rows
     },
 
     // Phase 3: TimeArcs Integration (isolated, ~50 refs)
@@ -443,7 +444,7 @@ function syncSubRowHighlights(svgEl, st) {
 // Wrapper to call imported renderCircles with required options and event handlers
 function renderCirclesWithOptions(layer, binned, rScale) {
     const data = collapseSubRowsBins(binned, state.layout.collapsedIPs);
-    renderCircles(layer, data, {
+    const processed = renderCircles(layer, data, {
         xScale,
         rScale,
         flagColors,
@@ -462,6 +463,7 @@ function renderCirclesWithOptions(layer, binned, rScale) {
         d3,
         separateFlags: state.ui.separateFlags
     });
+
 }
 
 // Unified render function
@@ -656,9 +658,6 @@ function initializeBarVisualization() {
             updateTcpFlowPacketsGlobal();
             drawSelectedFlowArcs();
             applyInvalidReasonFilter();
-            // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
-            const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
-            refreshAdaptiveOverview(selIPs).catch(e => console.warn('[CollapseAll] Overview refresh failed:', e));
         },
         onExpandAllRows: () => {
             state.layout.collapsedIPs.clear();
@@ -667,15 +666,16 @@ function initializeBarVisualization() {
             updateTcpFlowPacketsGlobal();
             drawSelectedFlowArcs();
             applyInvalidReasonFilter();
-            // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
-            const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
-            refreshAdaptiveOverview(selIPs).catch(e => console.warn('[ExpandAll] Overview refresh failed:', e));
         },
         onToggleShowTcpFlows: (checked) => { state.ui.showTcpFlows = checked; updateTcpFlowPacketsGlobal(); drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleEstablishment: (checked) => { state.ui.showEstablishment = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleDataTransfer: (checked) => { state.ui.showDataTransfer = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleClosing: (checked) => { state.ui.showClosing = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleGroundTruth: (checked) => { state.ui.showGroundTruth = checked; const selectedIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value); drawGroundTruthBoxes(selectedIPs); },
+        onToggleSubRowArcs: (checked) => {
+            state.ui.showSubRowArcs = checked;
+            drawSubRowArcs();
+        },
         onToggleSeparateFlags: (checked) => {
             state.ui.separateFlags = checked;
             isHardResetInProgress = true;
@@ -716,9 +716,6 @@ function initializeBarVisualization() {
                         drawGroundTruthBoxes(selIPs);
                     } catch(e) { logCatchError('binningToggle.refresh', e); }
                 }, 50);
-                // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
-                const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
-                refreshAdaptiveOverview(selIPs).catch(e => console.warn('[Binning] Overview refresh failed:', e));
             } catch (e) {
                 console.warn('Error updating visualization after binning toggle:', e);
                 // Fallback to original behavior
@@ -1175,6 +1172,7 @@ function updateTcpFlowPacketsGlobal() {
         if (dynamicLayer) dynamicLayer.style('display', 'none');
     }
     drawSelectedFlowArcs();
+    drawSubRowArcs();
 
     // If a flow selection is active, recompute bins for the selection and render in dynamic layer
     if (state.ui.showTcpFlows && state.flows.selectedIds.size > 0) {
@@ -1614,9 +1612,158 @@ function drawSelectedFlowArcs() {
     });
 }
 
+// Draw a permanent ghost arc for the first packet of each IP-pair sub-row.
+// Shows which IPs are connected in each sub-row at a glance.
+// Reads positions directly from DOM circles (same approach as hover arcs).
+function drawSubRowArcs() {
+    if (!svg || !mainGroup || !state.layout.ipPositions) return;
+    mainGroup.selectAll('.sub-row-arc').remove();
+    if (!state.ui.showSubRowArcs) return;
 
+    // Query actual rendered circles from the DOM — same source of truth as hover arcs.
+    // This gives us correct positions regardless of resolution or flag separation.
+    // Prefer dynamicLayer (zoomed/current resolution) over fullDomainLayer to avoid mixing resolutions.
+    const activeLayer = (dynamicLayer && dynamicLayer.style('display') !== 'none' && !dynamicLayer.selectAll('.direction-dot').empty())
+        ? dynamicLayer
+        : fullDomainLayer;
+    if (!activeLayer) return;
+    const allCircles = activeLayer.selectAll('.direction-dot');
+    if (allCircles.empty()) return;
 
+    // For each IP pair, find the earliest circle (by time) and record its datum.
+    // The datum already has correct yPosWithOffset (flag-separated) and binCenter (current resolution).
+    const earliestByPair = new Map(); // pairKey -> circle info
+    const pairsByIp = new Map();      // srcIp -> Set of pairKeys
 
+    // Deterministic tiebreaker: when bin centers match, prefer earlier TCP phase
+    // so collapsed and expanded modes produce the same arc color
+    const FLAG_RANK = { 'SYN': 0, 'SYN+ACK': 1, 'ACK': 2, 'PSH': 3, 'PSH+ACK': 4, 'FIN': 5, 'FIN+ACK': 6, 'RST': 7, 'RST+ACK': 8 };
+
+    allCircles.each(function () {
+        const d = d3.select(this).datum();
+        if (!d || !d.src_ip || !d.dst_ip) return;
+
+        const ts = d.binCenter || d.bin_start || d.timestamp || Infinity;
+        const flagType = d.flagType || d.flag_type || getFlagType(d);
+        const yPos = d.yPosWithOffset; // actual rendered y (accounts for flag separation)
+
+        // Collapsed circles merge multiple IP pairs — extract all from ipPairs
+        const pairs = (d.ipPairKey === '__collapsed__' && Array.isArray(d.ipPairs))
+            ? d.ipPairs
+            : [{ src_ip: d.src_ip, dst_ip: d.dst_ip }];
+
+        for (const p of pairs) {
+            if (!p.src_ip || !p.dst_ip || p.src_ip === p.dst_ip) continue;
+            const pairKey = makeIpPairKey(p.src_ip, p.dst_ip);
+
+            // Track pairs per source IP
+            if (!pairsByIp.has(d.src_ip)) pairsByIp.set(d.src_ip, new Set());
+            pairsByIp.get(d.src_ip).add(pairKey);
+
+            const existing = earliestByPair.get(pairKey);
+            const isEarlier = !existing || ts < existing.ts
+                || (ts === existing.ts && (FLAG_RANK[flagType] ?? 99) < (FLAG_RANK[existing.flagType] ?? 99));
+            if (isEarlier) {
+                earliestByPair.set(pairKey, {
+                    ts,
+                    src_ip: p.src_ip,
+                    dst_ip: p.dst_ip,
+                    flagType,
+                    flags: d.flags,
+                    binned: d.binned,
+                    binCenter: d.binCenter,
+                    timestamp: d.timestamp,
+                    yPosWithOffset: yPos
+                });
+            }
+        }
+    });
+
+    // Draw ghost arcs for IPs with multiple pairs
+    const drawnPairs = new Set();
+    for (const [ip, pairKeys] of pairsByIp) {
+        if (pairKeys.size <= 1) continue; // only for multi-pair IPs
+        for (const pairKey of pairKeys) {
+            if (drawnPairs.has(pairKey)) continue;
+            drawnPairs.add(pairKey);
+
+            const circle = earliestByPair.get(pairKey);
+            if (!circle) continue;
+
+            // Source y: actual circle position (already flag-separated)
+            const srcY = circle.yPosWithOffset;
+            // Destination y: sub-row center (destination row may not have a circle with this flag type)
+            const dstY = getIPYWithSubRowOffset(circle.dst_ip, circle.src_ip, circle.dst_ip);
+            if (srcY == null || dstY == null) continue;
+
+            const arcDatum = {
+                src_ip: circle.src_ip,
+                dst_ip: circle.dst_ip,
+                flagType: circle.flagType,
+                flags: circle.flags,
+                binned: circle.binned,
+                binCenter: circle.binCenter,
+                timestamp: circle.timestamp
+            };
+
+            const path = arcPathGenerator(arcDatum, {
+                xScale,
+                ipPositions: state.layout.ipPositions,
+                pairs: state.layout.pairs,
+                findIPPosition,
+                flagCurvature: FLAG_CURVATURE,
+                srcY,
+                dstY
+            });
+            if (!path) continue;
+
+            const color = flagColors[circle.flagType] || flagColors.OTHER || '#999';
+            const arcEl = mainGroup.append('path')
+                .attr('class', 'sub-row-arc')
+                .attr('d', path)
+                .style('stroke', color)
+                .style('stroke-width', '2px')
+                .style('stroke-opacity', 0.8)
+                .style('fill', 'none')
+                .style('pointer-events', 'none');
+
+            // Add arrowhead at destination end (same style as hover arcs)
+            const pathNode = arcEl.node();
+            const totalLen = pathNode.getTotalLength();
+            const ARROW_BACK = 12;
+            if (totalLen > ARROW_BACK + 5) {
+                const sp = pathNode.getPointAtLength(totalLen - ARROW_BACK);
+                const ep = pathNode.getPointAtLength(totalLen);
+                const colorKey = color.replace(/[^a-zA-Z0-9]/g, '');
+                const markerId = `sub-row-arrow-${colorKey}`;
+                const svgEl = d3.select(mainGroup.node().ownerSVGElement);
+                let defs = svgEl.select('defs');
+                if (defs.empty()) defs = svgEl.insert('defs', ':first-child');
+                if (defs.select(`#${markerId}`).empty()) {
+                    defs.append('marker')
+                        .attr('id', markerId)
+                        .attr('viewBox', '0 0 10 10')
+                        .attr('refX', 10).attr('refY', 5)
+                        .attr('markerWidth', 8).attr('markerHeight', 8)
+                        .attr('markerUnits', 'userSpaceOnUse')
+                        .attr('orient', 'auto')
+                      .append('path')
+                        .attr('d', 'M0,0 L10,5 L0,10 Z')
+                        .attr('fill', color);
+                }
+                mainGroup.append('path')
+                    .attr('class', 'sub-row-arc')
+                    .attr('d', `M${sp.x},${sp.y} L${ep.x},${ep.y}`)
+                    .style('stroke', color)
+                    .style('stroke-width', '2px')
+                    .style('stroke-opacity', 0.8)
+                    .style('fill', 'none')
+                    .style('pointer-events', 'none')
+                    .attr('marker-end', `url(#${markerId})`);
+            }
+        }
+    }
+}
 
 // Function to draw ground truth event boxes
 function drawGroundTruthBoxes(selectedIPs) {
@@ -2410,6 +2557,7 @@ async function refreshWithCurrentResolution() {
             // Additional updates after re-render
             try { updateTcpFlowPacketsGlobal(); } catch (e) { logCatchError('updateTcpFlowPacketsGlobal', e); }
             try { drawSelectedFlowArcs(); } catch (e) { logCatchError('drawSelectedFlowArcs', e); }
+            try { drawSubRowArcs(); } catch (e) { logCatchError('drawSubRowArcs', e); }
             try { applyInvalidReasonFilter(); } catch (e) { logCatchError('applyInvalidReasonFilter', e); }
 
             // Update zoom indicator to show new resolution
@@ -3730,17 +3878,12 @@ function visualizeTimeArcs(packets) {
                 updateTcpFlowPacketsGlobal();
                 drawSelectedFlowArcs();
                 applyInvalidReasonFilter();
-                // Refresh adaptive overview (visualizeTimeArcs resets it with empty flow data)
-                const selIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
-                refreshAdaptiveOverview(selIPs).catch(e => console.warn('[ToggleCollapse] Overview refresh failed:', e));
             }
         });
     } catch (e) { LOG('Failed to build IP labels', e); }
 
-    // 13. Setup overview chart
+    // 13. Sync arc domain for overview brush (do NOT recreate overview chart here)
     try { window.__arc_x_domain__ = xScale.domain(); } catch(e) { logCatchError('setArcXDomain', e); }
-    const effectiveOverviewExtent = state.timearcs.overviewTimeExtent || state.data.timeExtent;
-    createOverviewChart(packets, { timeExtent: effectiveOverviewExtent, width });
 
     LOG('SVG setup:', {
         containerWidth: width + margin.left + margin.right,
@@ -3778,6 +3921,7 @@ function visualizeTimeArcs(packets) {
         getResolutionForVisibleRange,
         renderFlowDetailViewZoomed,
         drawSelectedFlowArcs,
+        drawSubRowArcs,
         drawGroundTruthBoxes,
         createZoomAdaptiveTickFormatter,
         getVisiblePackets,
@@ -3831,6 +3975,7 @@ function visualizeTimeArcs(packets) {
             try { fullDomainBinsCache = { version: -1, data: [], binSize: null, sorted: false }; } catch(e) { logCatchError('fullDomainBinsCache.reset', e); }
             try { isHardResetInProgress = true; applyZoomDomain(xScale.domain(), 'program'); } catch(e) { logCatchError('applyZoomDomain', e); }
             try { drawSelectedFlowArcs(); } catch(e) { logCatchError('drawSelectedFlowArcs', e); }
+            try { drawSubRowArcs(); } catch(e) { logCatchError('drawSubRowArcs', e); }
             try {
                 if (state.ui.showGroundTruth) {
                     const selectedIPs = Array.from(document.querySelectorAll('#ipCheckboxes input[type="checkbox"]:checked')).map(cb => cb.value);
@@ -3969,6 +4114,7 @@ function visualizeTimeArcs(packets) {
         .map(cb => cb.value);
     drawGroundTruthBoxes(selectedIPs);
     drawSelectedFlowArcs();
+    drawSubRowArcs();
     try { drawFlagLegend(); } catch(e) { logCatchError('drawFlagLegend', e); }
 
     // 21. Final overlay sizing
@@ -4060,40 +4206,40 @@ let brushSelectionDataPath = null;
 
 // Check if page was opened from TimeArcs brush selection
 function checkForBrushSelectionData() {
-    console.log('[ip_bar_diagram] Checking for brush selection data...');
-    console.log('[ip_bar_diagram] Current URL:', window.location.href);
-    console.log('[ip_bar_diagram] Search params:', window.location.search);
+    console.log('[tcp-analysis] Checking for brush selection data...');
+    console.log('[tcp-analysis] Current URL:', window.location.href);
+    console.log('[tcp-analysis] Search params:', window.location.search);
 
     const urlParams = new URLSearchParams(window.location.search);
 
     if (!urlParams.has('fromSelection')) {
-        console.log('[ip_bar_diagram] No fromSelection parameter found in URL');
+        console.log('[tcp-analysis] No fromSelection parameter found in URL');
         return false;
     }
 
     // Get the storage key from URL parameter (supports multiple selections)
     const storageKey = urlParams.get('fromSelection');
-    console.log('[ip_bar_diagram] Page opened from TimeArcs brush selection, key:', storageKey);
+    console.log('[tcp-analysis] Page opened from TimeArcs brush selection, key:', storageKey);
 
     try {
         // Read from localStorage (sessionStorage doesn't work across tabs)
         const storedData = localStorage.getItem(storageKey);
         if (!storedData) {
-            console.warn('[ip_bar_diagram] No brush selection data found in localStorage for key:', storageKey);
+            console.warn('[tcp-analysis] No brush selection data found in localStorage for key:', storageKey);
             // Also check sessionStorage as fallback for older data
             const sessionData = sessionStorage.getItem(storageKey);
             if (sessionData) {
-                console.log('[ip_bar_diagram] Found data in sessionStorage (legacy)');
+                console.log('[tcp-analysis] Found data in sessionStorage (legacy)');
             }
             return false;
         }
 
         brushSelectionData = JSON.parse(storedData);
-        console.log('[ip_bar_diagram] Loaded brush selection data:', brushSelectionData);
+        console.log('[tcp-analysis] Loaded brush selection data:', brushSelectionData);
 
         // Clear localStorage to prevent reuse (data is one-time)
         localStorage.removeItem(storageKey);
-        console.log('[ip_bar_diagram] Cleared localStorage key:', storageKey);
+        console.log('[tcp-analysis] Cleared localStorage key:', storageKey);
 
         // Store IPs for pre-selection when data loads
         if (brushSelectionData.selection && brushSelectionData.selection.ips) {

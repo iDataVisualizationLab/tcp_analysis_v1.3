@@ -98,6 +98,7 @@ export function createTimeArcsZoomHandler(context) {
         getResolutionForVisibleRange,
         renderFlowDetailViewZoomed,
         drawSelectedFlowArcs,
+        drawSubRowArcs,
         drawGroundTruthBoxes,
         createZoomAdaptiveTickFormatter,
         getVisiblePackets,
@@ -268,6 +269,9 @@ export function createTimeArcsZoomHandler(context) {
             clearTimeout(handshakeTimeout);
             handshakeTimeout = setTimeout(() => { drawSelectedFlowArcs(); }, 8);
         }
+
+        // Redraw sub-row arcs (permanent ghost arcs for first packet per IP pair)
+        if (drawSubRowArcs) drawSubRowArcs();
 
         // Redraw ground truth boxes
         if (state.ui.showGroundTruth) {
@@ -444,6 +448,12 @@ export function createTimeArcsZoomHandler(context) {
                 .range([RADIUS_MIN, RADIUS_MAX]);
 
             renderMarksForLayer(dynamicLayer, binnedPackets, rScale);
+
+            // Re-draw sub-row arcs after circle rendering so they read
+            // correct positions from freshly rendered DOM circles.
+            if (drawSubRowArcs) {
+                try { drawSubRowArcs(); } catch (e) { logCatchError('drawSubRowArcs-postRender', e); }
+            }
         }, 50); // Debounce delay
     };
 }

@@ -1,6 +1,6 @@
 /**
  * Integration module for folder-based loading with existing visualization
- * Bridges the DataSource (with DuckDB support) with the ip_bar_diagram visualization
+ * Bridges the DataSource (with DuckDB support) with the tcp-analysis visualization
  * Now supports CSV-based multi-resolution loading from resolutions/ folder
  */
 

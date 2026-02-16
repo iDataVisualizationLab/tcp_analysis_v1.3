@@ -501,6 +501,7 @@ export function wireControlPanelControls(opts) {
     on('showDataTransfer', 'change', (e) => { if (opts.onToggleDataTransfer) opts.onToggleDataTransfer(e.target.checked); });
     on('showClosing', 'change', (e) => { if (opts.onToggleClosing) opts.onToggleClosing(e.target.checked); });
     on('showGroundTruth', 'change', (e) => { if (opts.onToggleGroundTruth) opts.onToggleGroundTruth(e.target.checked); });
+    on('showSubRowArcs', 'change', (e) => { if (opts.onToggleSubRowArcs) opts.onToggleSubRowArcs(e.target.checked); });
     on('separateFlags', 'change', (e) => { if (opts.onToggleSeparateFlags) opts.onToggleSeparateFlags(e.target.checked); });
 }
 
@@ -575,7 +576,7 @@ export function updateSizeLegend(globalMaxBinCount, radiusMin, radiusMax) {
     }
     const midCount = Math.max(1, Math.round(maxCount / 2));
     const values = [1, midCount, maxCount];
-    // sqrtScale matching ip_bar_diagram.js rScale
+    // sqrtScale matching tcp-analysis.js rScale
     const rScale = (v) => radiusMin + (radiusMax - radiusMin) * Math.sqrt((v - 1) / Math.max(1, maxCount - 1));
     const radii = values.map(v => Math.max(radiusMin, rScale(v)));
     const maxR = Math.max(...radii);

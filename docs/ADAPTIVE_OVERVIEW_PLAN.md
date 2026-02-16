@@ -294,7 +294,7 @@ createOverviewFromAdaptive(adaptiveData, {
 });
 ```
 
-### Phase 4: Integration with ip_bar_diagram.js ✅ COMPLETE
+### Phase 4: Integration with tcp-analysis.js ✅ COMPLETE
 
 **Implemented changes:**
 

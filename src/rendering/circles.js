@@ -295,4 +295,7 @@ export function renderCircles(layer, binned, options) {
                 .attr('cy', d => d.yPosWithOffset)
                 .style('cursor', 'pointer')
         );
+
+    // Return processed data so callers can access final positions (with flag separation)
+    return processed;
 }

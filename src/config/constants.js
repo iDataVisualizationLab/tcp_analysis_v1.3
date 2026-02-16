@@ -1,5 +1,5 @@
 // src/config/constants.js
-// Extracted from attack_timearcs.js
+// Extracted from attack-network.js
 
 export const MARGIN = { top: 40, right: 20, bottom: 30, left: 160 };
 export const DEFAULT_WIDTH = 1200;
