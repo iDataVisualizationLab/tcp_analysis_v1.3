@@ -436,6 +436,9 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
   // Reference to updateBifocalVisualization function
   let updateBifocalVisualizationFn = null;
 
+  // Reference to function that redraws all persistent selection visuals
+  let redrawPersistentSelectionsFn = null;
+
   // Store original unfiltered data for legend filtering and resize re-render
   let originalData = null;
   // Cache computed links from originalData to avoid recomputing on every render
@@ -515,10 +518,15 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
 
         // In force layout mode, update dimensions and re-render
         if (layoutMode === 'force_layout' && forceLayout) {
+          width = newWidth; // Update module-level width for brush extent
           forceLayout.width = newWidth + MARGIN.left + MARGIN.right;
           forceLayout.height = height;
           if (forceLayoutLayer) {
             forceLayout.render(forceLayoutLayer);
+          }
+          // Redraw persistent selections at new node positions
+          if (persistentSelections.length > 0 && redrawPersistentSelectionsFn) {
+            redrawPersistentSelectionsFn();
           }
           return;
         }
@@ -1383,7 +1391,9 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
     selectedIps.clear();
     brushSelection = null;
     selectionTimeRange = null;
-    persistentSelections = [];
+    // Preserve persistentSelections across re-renders (resize/filter)
+    // Reset multiSelectionsGroup ref so setupDragToBrush creates a fresh DOM group
+    multiSelectionsGroup = null;
 
     // Clear resize handler if it exists
     if (resizeCleanup && typeof resizeCleanup === 'function') {
@@ -2155,24 +2165,57 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       setupDragToBrush();
     };
 
+    // Compute current pixel bounds for a persistent selection using live scales/positions
+    const computeSelectionBounds = (selection) => {
+      const { timeBounds, ips, pixelBounds } = selection;
+
+      if (layoutMode === 'force_layout' && forceLayout) {
+        // Force layout: recompute bounds from current node positions
+        const nodePositions = forceLayout.getVisualNodePositions();
+        let minX = Infinity, minYv = Infinity, maxX = -Infinity, maxYv = -Infinity;
+        for (const ip of ips) {
+          const pos = nodePositions.get(ip);
+          if (pos) {
+            if (pos.x < minX) minX = pos.x;
+            if (pos.y < minYv) minYv = pos.y;
+            if (pos.x > maxX) maxX = pos.x;
+            if (pos.y > maxYv) maxYv = pos.y;
+          }
+        }
+        if (minX !== Infinity) {
+          const pad = 20;
+          return { x0: minX - pad, y0: minYv - pad, x1: maxX + pad, y1: maxYv + pad };
+        }
+        if (pixelBounds) return pixelBounds;
+        return null;
+      }
+
+      // Timearcs mode: recompute from time bounds + current Y scale
+      if (!timeBounds) return null;
+      const x0 = xScaleLens(timeBounds.minTime);
+      const x1 = xScaleLens(timeBounds.maxTime);
+      let minYv = Infinity, maxYv = -Infinity;
+      for (const ip of ips) {
+        const yPos = yScaleLens(ip);
+        if (isFinite(yPos)) {
+          if (yPos < minYv) minYv = yPos;
+          if (yPos > maxYv) maxYv = yPos;
+        }
+      }
+      const y0 = minYv !== Infinity ? minYv : timeBounds.minY;
+      const y1 = maxYv !== -Infinity ? maxYv : timeBounds.maxY;
+      return { x0, y0, x1, y1 };
+    };
+
     // Create visual representation for a persistent selection
     const createPersistentSelectionVisual = (selection) => {
       if (!multiSelectionsGroup) return;
 
-      const { id, timeBounds, arcs, ips, pixelBounds } = selection;
+      const { id, arcs, ips } = selection;
 
-      let x0, x1, y0, y1;
-      if (pixelBounds) {
-        // Force layout: use stored pixel bounds directly
-        ({ x0, y0, x1, y1 } = pixelBounds);
-      } else {
-        // Timearcs: convert time bounds to pixel positions
-        const { minTime, maxTime, minY, maxY } = timeBounds;
-        x0 = xScaleLens(minTime);
-        x1 = xScaleLens(maxTime);
-        y0 = minY;
-        y1 = maxY;
-      }
+      const bounds = computeSelectionBounds(selection);
+      if (!bounds) return;
+      const { x0, y0, x1, y1 } = bounds;
 
       // Create a group for this selection
       const selGroup = multiSelectionsGroup.append('g')
@@ -2265,6 +2308,15 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       console.log(`Created persistent selection #${id}`);
     };
 
+    // Redraw all persistent selection visuals (used after resize/re-render)
+    const redrawAllPersistentSelections = () => {
+      if (multiSelectionsGroup) {
+        multiSelectionsGroup.selectAll('.persistent-selection').remove();
+      }
+      persistentSelections.forEach(sel => createPersistentSelectionVisual(sel));
+    };
+    redrawPersistentSelectionsFn = redrawAllPersistentSelections;
+
     // Remove a persistent selection
     const removePersistentSelection = (id) => {
       // Remove from array
@@ -2293,18 +2345,11 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       if (!multiSelectionsGroup) return;
 
       persistentSelections.forEach(selection => {
-        const { id, timeBounds, pixelBounds } = selection;
+        const { id } = selection;
 
-        let x0, x1, y0, y1;
-        if (pixelBounds) {
-          ({ x0, y0, x1, y1 } = pixelBounds);
-        } else {
-          const { minTime, maxTime, minY, maxY } = timeBounds;
-          x0 = xScaleLens(minTime);
-          x1 = xScaleLens(maxTime);
-          y0 = minY;
-          y1 = maxY;
-        }
+        const bounds = computeSelectionBounds(selection);
+        if (!bounds) return;
+        const { x0, y0, x1, y1 } = bounds;
 
         const selGroup = multiSelectionsGroup.select(`.selection-${id}`);
         if (selGroup.empty()) return;
@@ -2983,6 +3028,11 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
       // Generate IP communications list
       generateIPCommunicationsList(data, linksWithNodes, colorForAttack);
 
+      // Re-draw persistent selections with updated positions
+      if (persistentSelections.length > 0) {
+        redrawAllPersistentSelections();
+      }
+
     } else {
     // === TIMEARCS MODE: Animate everything to timeline ===
     // Update lines - rebind to sorted data
@@ -3185,6 +3235,11 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
 
           // Generate IP communications list after data is fully loaded
           generateIPCommunicationsList(data, linksWithNodes, colorForAttack);
+
+          // Re-draw persistent selections with updated positions
+          if (persistentSelections.length > 0) {
+            redrawAllPersistentSelections();
+          }
 
           // Auto-fit disabled to match main.js detactTimeSeries() behavior
           // setTimeout(() => autoFitArcs(), 100);
@@ -3444,6 +3499,10 @@ import { ForceNetworkLayout } from './src/layout/force_network.js';
             if (brushGroup && brush) {
               brush.extent([[MARGIN.left, MARGIN.top], [width + MARGIN.left, newDynamicHeight]]);
               brushGroup.call(brush);
+            }
+            // Update persistent selection positions
+            if (persistentSelections.length > 0) {
+              redrawAllPersistentSelections();
             }
           }
         });

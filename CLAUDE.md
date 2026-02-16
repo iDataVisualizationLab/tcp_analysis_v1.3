@@ -377,6 +377,15 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 - Default: Force Layout (`layoutMode = 'force_layout'`, `labelMode = 'force_layout'`)
 - Force layout uses `attack_group` for coloring; Timearcs uses `attack` (finer-grained)
 
+### Brush Selection System (attack-network.js)
+
+Drag-to-brush selection allows users to select arcs/nodes for analysis and export to tcp-analysis:
+- **Persistent selections** (`persistentSelections[]`): Stored at module level as data objects with `{id, timeBounds, ips, arcs, timeRange}`. Survive resize/filter re-renders.
+- **`multiSelectionsGroup`**: SVG `<g>` holding selection visuals. Must be reset to `null` in `render()` cleanup (after `svg.selectAll('*').remove()`) so `setupDragToBrush()` creates a fresh DOM group. Forgetting this causes new selections to append to a detached element.
+- **`computeSelectionBounds()`**: Recomputes selection rectangle pixel bounds from stored IP names using current scales/node positions (not stale pixel values). Shared by `createPersistentSelectionVisual` and `updatePersistentSelectionVisuals`.
+- **`redrawAllPersistentSelections()` / `redrawPersistentSelectionsFn`**: Clears and re-creates all selection DOM elements. Called after positions finalize (timearcs animation end, force layout setup, component layout change) and from the force layout resize handler.
+- **Resize behavior**: Timearcs mode calls `render()` which preserves `persistentSelections` and redraws after animation. Force layout mode bypasses `render()` and calls `redrawPersistentSelectionsFn` directly.
+
 ### Shared Highlight Logic
 
 `src/rendering/highlightUtils.js` provides shared hover highlight functions used by both timearcs (`arcInteractions.js`) and force layout (`force_network.js`):
