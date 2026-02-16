@@ -230,9 +230,9 @@ export function renderCircles(layer, binned, options) {
                     dot.attr('r', baseR);
                     const pairsToArc = d.ipPairs || [{ src_ip: d.src_ip, dst_ip: d.dst_ip }];
                     pairsToArc.forEach(p => {
-                        // Calculate actual y positions with offsets for both source and destination
+                        // Source y: use circle's actual position (includes flag separation offset)
                         const pairKey = makeIpPairKey(p.src_ip, p.dst_ip);
-                        const srcY = calculateYPosWithOffset(d.src_ip, pairKey) || d.yPosWithOffset;
+                        const srcY = d.yPosWithOffset;
                         const dstY = calculateYPosWithOffset(p.dst_ip, pairKey);
                         const arcOpts = { xScale, ipPositions, pairs, findIPPosition, flagCurvature: FLAG_CURVATURE, srcY, dstY };
                         const arcD = { src_ip: p.src_ip, dst_ip: p.dst_ip, binned: d.binned, binCenter: d.binCenter, timestamp: d.timestamp, flagType: d.flagType, flags: d.flags };

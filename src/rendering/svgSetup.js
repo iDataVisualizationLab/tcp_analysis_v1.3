@@ -234,11 +234,12 @@ export function renderIPRowLabels(options) {
             const labelNode = node.select('.node-label').node();
 
             // Position triangle to the left of the label text using actual text width
+            // Extra spacing (18px) accounts for label expansion when highlighted (bold + larger font)
             let toggleX = -24;
             try {
                 const bbox = labelNode.getBBox();
                 // bbox.x is negative (text-anchor: end), so left edge = bbox.x
-                toggleX = bbox.x - 10;
+                toggleX = bbox.x - 18;
             } catch (_) {}
 
             const toggle = node.append('g')
@@ -265,16 +266,6 @@ export function renderIPRowLabels(options) {
                 .attr('stroke-width', 2)
                 .attr('stroke-linecap', 'round')
                 .attr('stroke-linejoin', 'round');
-
-            // Pair count badge
-            toggle.append('text')
-                .attr('class', 'pair-count-badge')
-                .attr('x', -12)
-                .attr('dy', '.35em')
-                .attr('text-anchor', 'end')
-                .style('font-size', '9px')
-                .style('fill', '#999')
-                .text(pairCount);
 
             // Stop mousedown from triggering the drag-reorder behavior
             toggle
