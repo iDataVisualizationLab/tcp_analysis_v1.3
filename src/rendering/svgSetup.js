@@ -327,7 +327,8 @@ export function renderIPRowLabels(options) {
                 const partnerIp = parts[0] === ip ? parts[1] : parts[0];
                 const centerY = baseY + pairIndex * (subRowHeight + SUB_ROW_GAP);
 
-                const rect = highlightGroup.append('rect')
+                // Visual highlight rect spans full chart width (no pointer events)
+                highlightGroup.append('rect')
                     .attr('class', 'sub-row-highlight')
                     .datum({ ip, partnerIp, pairKey, pairIndex })
                     .attr('x', -150)
@@ -338,9 +339,16 @@ export function renderIPRowLabels(options) {
                     .style('opacity', 0);
 
                 // Index 0 hover is handled by the main IP label;
-                // other sub-rows need their own hover targets
+                // other sub-rows get a narrow hover target limited to the label area
                 if (pairIndex > 0) {
-                    rect
+                    highlightGroup.append('rect')
+                        .attr('class', 'sub-row-hover-target')
+                        .datum({ ip, partnerIp, pairKey, pairIndex })
+                        .attr('x', -150)
+                        .attr('y', centerY - subRowHeight / 2)
+                        .attr('width', 150)
+                        .attr('height', subRowHeight)
+                        .style('fill', 'transparent')
                         .style('pointer-events', 'all')
                         .on('mouseover', function() {
                             if (onHighlight) {

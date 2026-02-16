@@ -247,8 +247,13 @@ label {
 
 /* Sub-row highlight styles for pair-specific connectivity */
 .sub-row-highlight {
-    pointer-events: all;
+    pointer-events: none;
     transition: opacity 0.15s ease-out;
+}
+/* Narrow hover targets limited to the IP label area */
+.sub-row-hover-target {
+    pointer-events: all;
+    cursor: pointer;
 }
 .sub-row-highlight.active {
     opacity: 0.15 !important;

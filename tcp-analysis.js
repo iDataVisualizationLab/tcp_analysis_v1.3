@@ -423,7 +423,7 @@ function getIPYWithSubRowOffset(ip, srcIp, dstIp) {
  */
 function syncSubRowHighlights(svgEl, st) {
     const SUB_ROW_GAP = 2;
-    svgEl.selectAll('.sub-row-highlight').each(function() {
+    svgEl.selectAll('.sub-row-highlight, .sub-row-hover-target').each(function() {
         const rect = d3.select(this);
         const d = rect.datum();
         if (!d || !d.ip) return;
