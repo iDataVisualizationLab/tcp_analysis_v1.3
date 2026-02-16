@@ -238,11 +238,12 @@ label {
     transition: opacity 0.15s ease-out;
 }
 .row-highlight.active {
-    opacity: 0.15 !important;
+    opacity: 0.18 !important;
+    fill: #868e96 !important;
 }
 .row-highlight.self {
-    opacity: 0.25 !important;
-    fill: #ffd43b !important;
+    opacity: 0.28 !important;
+    fill: #495057 !important;
 }
 
 /* Expand/Collapse All sub-rows button — floats in the left margin */
@@ -273,11 +274,12 @@ label {
     cursor: pointer;
 }
 .sub-row-highlight.active {
-    opacity: 0.15 !important;
+    opacity: 0.18 !important;
+    fill: #868e96 !important;
 }
 .sub-row-highlight.self {
-    opacity: 0.25 !important;
-    fill: #ffd43b !important;
+    opacity: 0.28 !important;
+    fill: #495057 !important;
 }
 
 /* Node label styles for connectivity highlighting */

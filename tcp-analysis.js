@@ -329,6 +329,7 @@ function collapseSubRowsBins(binned, collapsedIPs) {
                 totalBytes: 0,
                 originalPackets: [],
                 ipPairs: [],
+                allIPs: new Set(),
                 _seenPairs: new Set()
             };
             groups.set(key, g);
@@ -338,6 +339,8 @@ function collapseSubRowsBins(binned, collapsedIPs) {
         if (Array.isArray(d.originalPackets)) {
             g.originalPackets.push(...d.originalPackets);
         }
+        if (d.src_ip) g.allIPs.add(d.src_ip);
+        if (d.dst_ip) g.allIPs.add(d.dst_ip);
         const pk = makeIpPairKey(d.src_ip, d.dst_ip);
         if (!g._seenPairs.has(pk)) {
             g._seenPairs.add(pk);
@@ -3164,8 +3167,14 @@ function highlight(selected) {
             .classed("connected", d => d !== selected.ip && connectedIPs.has(d));
 
         mainGroup.selectAll(".direction-dot")
-            .classed("faded", d => d.src_ip !== selected.ip && d.dst_ip !== selected.ip)
-            .classed("highlighted", d => d.src_ip === selected.ip || d.dst_ip === selected.ip);
+            .classed("faded", d => {
+                if (d.allIPs) return !d.allIPs.has(selected.ip);
+                return d.src_ip !== selected.ip && d.dst_ip !== selected.ip;
+            })
+            .classed("highlighted", d => {
+                if (d.allIPs) return d.allIPs.has(selected.ip);
+                return d.src_ip === selected.ip || d.dst_ip === selected.ip;
+            });
 
         // Highlight row backgrounds for connected IPs
         svg.selectAll(".row-highlight")

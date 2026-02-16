@@ -124,7 +124,8 @@ function groupByPosition(packets, { findIPPosition, ipPositions, pairs }) {
                 count: 0,
                 originalPackets: [],
                 binned: false,
-                totalBytes: 0
+                totalBytes: 0,
+                allIPs: new Set()
             });
         }
 
@@ -132,6 +133,8 @@ function groupByPosition(packets, { findIPPosition, ipPositions, pairs }) {
         group.count++;
         group.originalPackets.push(packet);
         group.totalBytes += (packet.length || 0);
+        group.allIPs.add(packet.src_ip);
+        group.allIPs.add(packet.dst_ip);
     });
 
     return Array.from(positionGroups.values());
@@ -179,7 +182,8 @@ function binByTime(packets, binSize, { findIPPosition, ipPositions, pairs }) {
                 count: 0,
                 originalPackets: [],
                 binned: true,
-                totalBytes: 0
+                totalBytes: 0,
+                allIPs: new Set()
             });
         }
 
@@ -187,6 +191,8 @@ function binByTime(packets, binSize, { findIPPosition, ipPositions, pairs }) {
         bin.count++;
         bin.originalPackets.push(packet);
         bin.totalBytes += (packet.length || 0);
+        bin.allIPs.add(packet.src_ip);
+        bin.allIPs.add(packet.dst_ip);
     });
 
     const binnedData = Array.from(bins.values());
