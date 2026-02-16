@@ -245,6 +245,23 @@ label {
     fill: #ffd43b !important;
 }
 
+/* Expand/Collapse All sub-rows button — floats in the left margin */
+#expand-all-btn {
+    position: absolute;
+    left: 10px;
+    z-index: 10;
+    cursor: pointer;
+    opacity: 0.75;
+    transition: opacity 0.2s ease, transform 0.15s ease;
+    pointer-events: auto;
+    border-radius: 50%;
+    line-height: 0;
+}
+#expand-all-btn:hover {
+    opacity: 1;
+    transform: scale(1.15);
+}
+
 /* Sub-row highlight styles for pair-specific connectivity */
 .sub-row-highlight {
     pointer-events: none;

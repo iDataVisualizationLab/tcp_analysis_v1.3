@@ -493,8 +493,6 @@ export function wireControlPanelControls(opts) {
     on('ipSearch', 'input', (e) => { if (opts.onIpSearch) opts.onIpSearch(e.target.value); });
     on('selectAllIPs', 'click', () => { if (opts.onSelectAllIPs) opts.onSelectAllIPs(); });
     on('clearAllIPs', 'click', () => { if (opts.onClearAllIPs) opts.onClearAllIPs(); });
-    on('collapseAllRows', 'click', () => { if (opts.onCollapseAllRows) opts.onCollapseAllRows(); });
-    on('expandAllRows', 'click', () => { if (opts.onExpandAllRows) opts.onExpandAllRows(); });
 
     on('showTcpFlows', 'change', (e) => { if (opts.onToggleShowTcpFlows) opts.onToggleShowTcpFlows(e.target.checked); });
     on('showEstablishment', 'change', (e) => { if (opts.onToggleEstablishment) opts.onToggleEstablishment(e.target.checked); });
