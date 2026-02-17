@@ -1,4 +1,4 @@
-// Overview chart module: manages stacked invalid flows overview, brush, and legends
+// Overview Bar chart — stacked flow bars at bottom of Packet View, with brush-navigable time range
 import { GLOBAL_BIN_COUNT } from './config.js';
 import { createOverviewFlowLegend } from './legends.js';
 import { showFlowListModal } from './control-panel.js';

@@ -10,7 +10,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 This is a **dual-visualization network traffic analysis system** built with D3.js v7 for analyzing TCP packet data and attack patterns. It provides two complementary views:
 
 1. **Network TimeArcs** (`attack-network.html` → `attack-network.js`) - Arc-based visualization of attack events over time with force-directed IP positioning. **Default mode: Force layout network view** (2D force-directed network graph); Timearcs Time Line View (arc-based timeline) available via radio toggle
-2. **TCP Connection Analysis** (`tcp-analysis.html` → `tcp-analysis.js`) - Detailed packet-level visualization with stacked bar charts and flow reconstruction
+2. **TCP Connection Analysis** (`tcp-analysis.html` → `tcp-analysis.js`) - Detailed packet-level visualization with three named UI components:
+   - **Packet View** — main visualization area: stacked circles, arcs, time axis (`#chart-column`)
+   - **Overview Bar chart** — stacked flow bars at bottom, brush-navigable time range (`#overview-container`)
+   - **Control Panel** — floating draggable panel: IP selection, legends, view controls (`#control-panel`)
 
 ## Running the Application
 
@@ -41,10 +44,10 @@ The `index.html` redirects to `attack-network.html` by default.
                            │
 ┌──────────────────────────┴──────────────────────────────┐
 │  Supporting Modules                                      │
-│  control-panel.js - Floating control panel (drag/collapse)│
+│  control-panel.js - Control Panel UI (drag/collapse)     │
 │  sidebar.js      - IP/flow selection UI                  │
 │  legends.js      - Legend rendering                      │
-│  overview_chart.js - Stacked flow overview + brush nav   │
+│  overview_chart.js - Overview Bar chart + brush nav      │
 │  folder_integration.js (~1300 LOC) - Folder data coord   │
 │  folder_loader.js - Chunked folder data loading          │
 │  viewer_loader.js - Viewer initialization utilities      │
@@ -85,9 +88,9 @@ The `index.html` redirects to `attack-network.html` by default.
 5. **Resolution Management** → `resolution-manager.js` handles zoom-level data with LRU caching
 6. **Rendering** → stacked bars by flag type, arcs between IPs (`initialRender.js` prepares data, `bars.js`/`circles.js` render)
 
-**Flow Data for Overview Chart** (tcp-analysis.js:1703-1757):
+**Flow Data for Overview Bar chart** (tcp-analysis.js:1703-1757):
 - When IPs are selected, `updateIPFilter()` is called (async function)
-- Uses adaptive multi-resolution loader (`flow_bins_index.json`) for efficient overview rendering
+- Uses adaptive multi-resolution loader (`flow_bins_index.json`) for efficient Overview Bar chart rendering
 - Falls back to `flow_bins.json` or chunk loading if multi-resolution not available
 - For v3 format (`chunked_flows_by_ip_pair`), filters chunks by IP pair first for efficiency
 - Passes filtered/aggregated data to `overview_chart.js` for categorization and binning
@@ -174,18 +177,18 @@ Both are monolithic files that compose modules from `/src`. They maintain extens
 - A progress bar is shown in `tcp-analysis.html` while data is loading on page open
 - Disappears once initial render completes
 
-### Overview Chart
+### Overview Bar chart
 
 The `overview_chart.js` module (~900 LOC) provides:
-- Stacked bar overview of invalid flows by reason
-- Brush-based time range selection synced with main chart zoom
+- Stacked bar overview of invalid flows by reason (the **Overview Bar chart**)
+- Brush-based time range selection synced with Packet View zoom
 - Legend integration for filtering by invalid reason/close type
 
 **Current Implementation** (Multi-resolution adaptive loading):
 - `tcp-analysis.js` initializes `AdaptiveOverviewLoader` from `flow_bins_index.json`
 - Loader selects appropriate resolution based on visible time range (hour → 10min → 1min)
 - Filters pre-aggregated flow bins by selected IP pairs
-- Creates synthetic flows from bin data for overview chart
+- Creates synthetic flows from bin data for Overview Bar chart
 - **Fallback chain**: adaptive loader → `flow_bins.json` → chunk loading
 
 **Multi-resolution index** (`flow_bins_index.json`):
@@ -286,7 +289,7 @@ The `packets` column contains embedded packet data: `delta_ts:flags:dir,...`
 **Lazy Loading Behavior**:
 - On page load: Only `index.json` is fetched (~87KB)
 - On IP selection: No CSV files loaded yet; UI shows "Flow List Available"
-- On overview chart click: Only relevant IP pair CSVs are fetched for the clicked time range
+- On Overview Bar chart click: Only relevant IP pair CSVs are fetched for the clicked time range
 - Loaded CSVs are cached in memory for subsequent requests
 
 **Key Files**:
@@ -297,7 +300,7 @@ The `packets` column contains embedded packet data: `delta_ts:flags:dir,...`
 - Flow list popup works without loading chunk files
 - If `fp` column present: "View Packets" visualizes embedded packet data (no chunk files needed)
 - If `fp` column absent: "View Packets" and "Export CSV" buttons are disabled
-- Overview chart still uses adaptive flow_bins for visualization
+- Overview Bar chart still uses adaptive flow_bins for visualization
 - CSV format is ~45% smaller than JSON; all files under GitHub's 100MB limit
 
 ### Packet Data Multi-Resolution (v3.3)
@@ -355,7 +358,7 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 **Sub-Row Ghost Arcs** (`src/rendering/circles.js`, `src/rendering/svgSetup.js`):
 - Persistent ghost arcs show IP pair connections at the sub-row level
 - Rendered as low-opacity arcs connecting each IP pair's sub-row position
-- Toggled via a control in the control panel
+- Toggled via a control in the Control Panel
 - `svgSetup.js` handles SVG layer setup and hover area sizing; hover hit areas are limited to the IP label width to prevent overlap with chart content
 
 **Row Hover Highlighting**:
@@ -370,7 +373,7 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 **Row Collapse Behavior**:
 - All IP rows with multiple pairs start **collapsed by default** (`defaultCollapseApplied` flag)
 - `state.layout.collapsedIPs` Set tracks which IPs have their sub-rows merged
-- Click individual IP labels to expand/collapse; "Collapse All"/"Expand All" buttons rendered inline to the left of each IP row label (not in the control panel)
+- Click individual IP labels to expand/collapse; "Collapse All"/"Expand All" buttons rendered inline to the left of each IP row label (not in the Control Panel)
 - Collapsed rows merge all pair bins at same (time, yPos, flagType) into single circles
 
 **Key Data Structures**:
@@ -409,11 +412,11 @@ Drag-to-brush selection allows users to select arcs/nodes for analysis and expor
 - `highlightEndpointLabels()` / `unhighlightEndpointLabels()` — bold, enlarge, color active IP labels; dim others
 - `ipFromDatum()` (internal) — normalizes datum to IP string (timearcs labels bind raw strings, force layout nodes bind `{id, degree}` objects)
 
-### Floating Control Panel
+### Control Panel
 
-The control panel (`control-panel.js`) is a `position: fixed` aside with drag-to-move and click-to-collapse behavior:
+The Control Panel (`control-panel.js`) is a `position: fixed` aside with drag-to-move and click-to-collapse behavior:
 - **Drag handle**: Title bar at top — click to collapse/expand, drag to reposition
-- **Zoom controls bar**: Positioned above the panel via `position: absolute; bottom: 100%`. Contains resolution dropdown, current resolution indicator badge, and zoom +/- buttons. Stays visible when panel is collapsed. Moves with the panel on drag.
+- **Zoom controls bar**: Positioned above the Control Panel via `position: absolute; bottom: 100%`. Contains resolution dropdown, current resolution indicator badge, and zoom +/- buttons. Stays visible when panel is collapsed. Moves with the panel on drag.
 - **Controls body**: Scrollable area with IP selection, TCP flags, legends, flow visualization options
 - Panel uses `overflow: visible` so the zoom bar (absolutely positioned above) is not clipped
 
@@ -430,8 +433,8 @@ The fisheye lens effect (`src/plugins/d3-fisheye.js`, wrapped by `src/scales/dis
 - **LRU Cache**: `resolution-manager.js` caches loaded detail chunks with automatic eviction
 - **Multi-resolution loading**: Zoom-level dependent data loading (overview → detail)
 - **IP-pair organization** (v3): Chunks organized by IP pair enable efficient filtering—only load chunks for selected IP pairs instead of scanning all chunks
-- **Adaptive overview resolution**: Coarse bins for full view, fine bins when zoomed
-- **Lazy flow list loading**: CSV files only loaded when user clicks overview chart bars
+- **Adaptive overview resolution**: Coarse bins for full view, fine bins when zoomed (Overview Bar chart)
+- **Lazy flow list loading**: CSV files only loaded when user clicks Overview Bar chart bars
 
 ## Module Dependencies
 

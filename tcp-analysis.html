@@ -9,7 +9,9 @@
 </head>
 <body>
     <div id="main-layout">
+      <!-- Packet View: main packet visualization (stacked circles, arcs, time axis) -->
       <div id="chart-column">
+        <!-- Packet View inner container -->
         <div id="chart-container">
             <div id="chart"></div>
             <div id="loadingMessage"></div>
@@ -21,10 +23,11 @@
                 </div>
             </div>
         </div>
-        <!-- Bottom overlay: main chart timeline axis + size/flag legends -->
+        <!-- Packet View bottom overlay: timeline axis + size/flag legends -->
         <div id="chart-bottom-overlay">
             <svg id="chart-bottom-overlay-svg"></svg>
         </div>
+        <!-- Overview Bar chart: stacked flow bars at bottom, brush-navigable time range -->
         <div id="overview-container" style="display: none;">
             <div style="text-align: center; margin-bottom: 5px; color: #6c757d; font-size: 12px; font-weight: bold;">
                 Timeline Overview - Drag to Navigate
@@ -33,9 +36,10 @@
         </div>
       </div>
     </div><!-- end #main-layout -->
+    <!-- Control Panel: floating draggable panel with IP selection, legends, and view controls -->
     <aside id="control-panel">
         <div id="control-panel-drag-handle">
-            <span class="control-panel-title">Controls</span>
+            <span class="control-panel-title">Control Panel</span>
             <span id="control-panel-collapse-icon">&#x25BC;</span>
         </div>
         <!-- Zoom controls — attached above the panel -->

@@ -1,5 +1,5 @@
-// Control panel logic for IP Connection Analysis
-// This file contains all logic for the control panel UI and its event handlers
+// Control Panel — floating draggable panel for IP Connection Analysis (tcp-analysis.html)
+// Contains all Control Panel UI logic: IP selection, legends, TCP flow controls, and event handlers
 import { getFlowColors, getInvalidLabels, getInvalidReason, getFlowColor } from './legends.js';
 import { MAX_FLOW_LIST_ITEMS, FLOW_LIST_RENDER_BATCH } from './config.js';
 
