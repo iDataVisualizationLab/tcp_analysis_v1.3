@@ -9,7 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **dual-visualization network traffic analysis system** built with D3.js v7 for analyzing TCP packet data and attack patterns. It provides two complementary views:
 
-1. **Network TimeArcs** (`attack-network.html` → `attack-network.js`) - Arc-based visualization of attack events over time with force-directed IP positioning. **Default mode: Force Layout** (2D force-directed network graph); Timearcs mode (arc-based timeline) available via radio toggle
+1. **Network TimeArcs** (`attack-network.html` → `attack-network.js`) - Arc-based visualization of attack events over time with force-directed IP positioning. **Default mode: Force layout network view** (2D force-directed network graph); Timearcs Time Line View (arc-based timeline) available via radio toggle
 2. **TCP Connection Analysis** (`tcp-analysis.html` → `tcp-analysis.js`) - Detailed packet-level visualization with stacked bar charts and flow reconstruction
 
 ## Running the Application
@@ -55,11 +55,12 @@ The `index.html` redirects to `attack-network.html` by default.
 │                                                          │
 │  rendering/   bars.js, circles.js, arcPath.js, rows.js   │
 │               arcInteractions.js, highlightUtils.js      │
-│               tooltip.js                                 │
+│               tooltip.js, svgSetup.js                    │
 │  scales/      scaleFactory.js, distortion.js (fisheye)   │
 │  layout/      forceSimulation.js, force_network.js       │
 │  interaction/ zoom.js, dragReorder.js, resize.js         │
-│  data/        binning.js, csvParser.js, flowReconstruction.js
+│  data/        binning.js (visible packets, bar width calc) │
+│               csvParser.js, flowReconstruction.js        │
 │               resolution-manager.js, data-source.js      │
 │               component-loader.js, csv-resolution-manager.js
 │               aggregation.js, flow-loader.js             │
@@ -80,9 +81,9 @@ The `index.html` redirects to `attack-network.html` by default.
 1. **CSV Input** → `csvParser.js` stream parsing OR folder-based chunked loading
 2. **Packet Objects** → flow reconstruction, force layout positioning
 3. **Ground Truth** → `groundTruth.js` loads attack event annotations from CSV
-4. **Binning** → adaptive time-based aggregation (`binning.js`)
+4. **Pre-binned Data** → Multi-resolution CSV files loaded by `csv-resolution-manager.js` (hours/minutes/seconds/100ms/10ms/1ms/raw)
 5. **Resolution Management** → `resolution-manager.js` handles zoom-level data with LRU caching
-6. **Rendering** → stacked bars by flag type, arcs between IPs
+6. **Rendering** → stacked bars by flag type, arcs between IPs (`initialRender.js` prepares data, `bars.js`/`circles.js` render)
 
 **Flow Data for Overview Chart** (tcp-analysis.js:1703-1757):
 - When IPs are selected, `updateIPFilter()` is called (async function)
@@ -168,6 +169,10 @@ The code auto-detects format from `manifest.json` and loads appropriately.
 - `tcp-analysis.js` (~4600 LOC) - Detailed packet analysis with stacked bars
 
 Both are monolithic files that compose modules from `/src`. They maintain extensive internal state (IP positions, selections, zoom state) and trigger re-renders on state changes.
+
+**Loading Bar** (`tcp-analysis.html`, `tcp-analysis.css`):
+- A progress bar is shown in `tcp-analysis.html` while data is loading on page open
+- Disappears once initial render completes
 
 ### Overview Chart
 
@@ -347,6 +352,16 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 - Subsequent pairs grow downward within the row's allocated height
 - `makeIpPairKey(srcIp, dstIp)` creates canonical keys (alphabetically sorted)
 
+**Sub-Row Ghost Arcs** (`src/rendering/circles.js`, `src/rendering/svgSetup.js`):
+- Persistent ghost arcs show IP pair connections at the sub-row level
+- Rendered as low-opacity arcs connecting each IP pair's sub-row position
+- Toggled via a control in the control panel
+- `svgSetup.js` handles SVG layer setup and hover area sizing; hover hit areas are limited to the IP label width to prevent overlap with chart content
+
+**Row Hover Highlighting**:
+- Hovering an IP row uses grey shades (not blue/yellow)
+- Highlights all bins in the row that belong to the hovered IP pair, not just the first matching bin
+
 **Arc Path Connections** (`src/rendering/arcPath.js`):
 - `arcPathGenerator()` accepts optional `srcY` and `dstY` for offset positions
 - Hover handlers calculate both source and destination offsets using `calculateYPosWithOffset()`
@@ -355,7 +370,7 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 **Row Collapse Behavior**:
 - All IP rows with multiple pairs start **collapsed by default** (`defaultCollapseApplied` flag)
 - `state.layout.collapsedIPs` Set tracks which IPs have their sub-rows merged
-- Click individual IP labels to expand/collapse; "Collapse All"/"Expand All" buttons in control panel
+- Click individual IP labels to expand/collapse; "Collapse All"/"Expand All" buttons rendered inline to the left of each IP row label (not in the control panel)
 - Collapsed rows merge all pair bins at same (time, yPos, flagType) into single circles
 
 **Key Data Structures**:
@@ -373,8 +388,8 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 - **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
 
 **Network Mode Toggle** (`attack-network.html`):
-- Radio buttons switch between "Timearcs" (arc timeline) and "Force Layout" (2D network graph)
-- Default: Force Layout (`layoutMode = 'force_layout'`, `labelMode = 'force_layout'`)
+- Radio buttons switch between "Timearcs Time Line View" (arc timeline) and "Force layout network view" (2D network graph)
+- Default: Force layout network view (`layoutMode = 'force_layout'`, `labelMode = 'force_layout'`)
 - Force layout uses `attack_group` for coloring; Timearcs uses `attack` (finer-grained)
 
 ### Brush Selection System (attack-network.js)
@@ -421,8 +436,8 @@ The fisheye lens effect (`src/plugins/d3-fisheye.js`, wrapped by `src/scales/dis
 ## Module Dependencies
 
 Main files import heavily from `/src`:
-- **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`, `highlightUtils.js`
-- **Data**: `binning.js`, `flowReconstruction.js`, `csvParser.js`, `aggregation.js`, `resolution-manager.js`, `data-source.js`, `component-loader.js`
+- **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`, `highlightUtils.js`, `svgSetup.js`
+- **Data**: `binning.js` (visible packets, bar width), `flowReconstruction.js`, `csvParser.js`, `aggregation.js`, `resolution-manager.js`, `csv-resolution-manager.js`, `data-source.js`, `component-loader.js`, `initialRender.js`
 - **Layout**: `forceSimulation.js`, `force_network.js`
 - **Interaction**: `zoom.js`, `arcInteractions.js`, `dragReorder.js`, `resize.js`
 - **Scales**: `scaleFactory.js`, `distortion.js`
