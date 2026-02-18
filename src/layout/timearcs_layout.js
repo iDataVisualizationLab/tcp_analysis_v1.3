@@ -208,6 +208,71 @@ export class TimearcsLayout {
     return this._bifocalState;
   }
 
+  /**
+   * Lightweight resize: stretch/shrink the x-axis without re-running
+   * the force simulation or rebuilding any data structures.
+   * Reuses _updateBifocalVisualization() for element repositioning.
+   */
+  updateWidth() {
+    if (!this._arcPaths) return;   // nothing rendered yet
+
+    // 1. Recalculate width from container
+    const availableWidth = this._container.clientWidth || 1200;
+    const viewportWidth = Math.max(availableWidth, 800);
+    const newWidth = viewportWidth - MARGIN.left - MARGIN.right;
+
+    if (Math.abs(newWidth - this._width) < 10) return;  // skip tiny changes
+
+    // 2. Derive new xEnd preserving the arc radius offset
+    const oldSvgWidth = this._width + MARGIN.left + MARGIN.right;
+    const arcRadiusOffset = oldSvgWidth - this._currentXEnd;  // MARGIN.right + maxArcRadius
+    const newSvgWidth = newWidth + MARGIN.left + MARGIN.right;
+    const newXEnd = newSvgWidth - arcRadiusOffset;
+
+    // 3. Update stored dimensions
+    this._width = newWidth;
+    this._timelineWidth = newWidth;
+    this._currentXEnd = newXEnd;
+
+    // 4. Update base x scale range
+    this._x.range([this._xStart, newXEnd]);
+
+    // 5. Update SVG width
+    this._svg.attr('width', newSvgWidth);
+
+    // 6. Recreate axis
+    const axisSvg = d3.select('#axis-top');
+    axisSvg.selectAll('*').remove();
+    axisSvg.attr('width', newSvgWidth);
+    const axisScale = d3.scaleTime()
+      .domain([this._xMinDate, this._xMaxDate])
+      .range([0, newXEnd - this._xStart]);
+    axisSvg.append('g')
+      .attr('transform', `translate(${this._xStart}, 28)`)
+      .call(d3.axisTop(axisScale).ticks(7).tickFormat(d => {
+        if (this._looksAbsolute) return this._utcTick(d);
+        return `t=${Math.round(d.getTime() / this._unitMs)}${this._unitSuffix}`;
+      }));
+
+    // 7. Update bifocal bar + handles
+    const bifocalBarSvg = d3.select('#bifocal-bar');
+    bifocalBarSvg.attr('width', newSvgWidth);
+    if (this._bifocalHandles) {
+      this._bifocalHandles.updateLayout(this._xStart, newXEnd);
+    }
+
+    // 8. Update brush extent
+    if (this._brushGroup && this._brush) {
+      this._brush.extent([[MARGIN.left, MARGIN.top],
+                          [newWidth + MARGIN.left, MARGIN.top + INNER_HEIGHT]]);
+      this._brushGroup.call(this._brush);
+      this._brushGroup.select('.overlay').style('pointer-events', 'none');
+    }
+
+    // 9. Rescale all visual elements (arcs, gradients, rows, labels, selections)
+    this._updateBifocalVisualization();
+  }
+
   /** Clears all brush selections and resets state. */
   clearBrushSelection() {
     if (this._brush && this._brushGroup) {
@@ -270,6 +335,8 @@ export class TimearcsLayout {
     this._brushSelection = null;
     this._selectionTimeRange = null;
     this._multiSelectionsGroup = null;
+    this._brushGroup = null;
+    this._brush = null;
     this._arcPaths = null;
     this._bifocalHandles = null;
     this._data = data;

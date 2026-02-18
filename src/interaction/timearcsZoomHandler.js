@@ -8,6 +8,13 @@ import { RADIUS_MIN, RADIUS_MAX } from '../config/constants.js';
 let zoomTimeout = null;
 let handshakeTimeout = null;
 
+// Track previous resolution for split/merge animation
+let lastRenderedResolution = null;
+let lastRenderedData = [];
+
+// Resolution ordering (coarse to fine) for determining zoom direction
+const RES_ORDER = ['hours', 'minutes', 'seconds', '100ms', '10ms', '1ms', 'raw'];
+
 /**
  * Create a duration label updater function.
  *
@@ -313,6 +320,7 @@ export function createTimeArcsZoomHandler(context) {
 
             let binnedPackets;
             let usedMultiRes = false;
+            let resolvedResolution = null;
             const useMultiRes = getUseMultiRes();
             const multiResDataFn = getMultiResData;
             const multiResAvailableFn = isMultiResAvailable;
@@ -323,6 +331,7 @@ export function createTimeArcsZoomHandler(context) {
                     const multiResResult = await multiResDataFn(xScale);
                     if (multiResResult.data && multiResResult.data.length > 0) {
                         setCurrentResolutionLevel(multiResResult.resolution);
+                        resolvedResolution = multiResResult.resolution;
                         usedMultiRes = true;
 
                         // Process multi-resolution data
@@ -447,7 +456,35 @@ export function createTimeArcsZoomHandler(context) {
                 .domain([1, Math.max(1, globalMaxBinCount)])
                 .range([RADIUS_MIN, RADIUS_MAX]);
 
-            renderMarksForLayer(dynamicLayer, binnedPackets, rScale);
+            // Build transition options if resolution changed
+            let transitionOpts = null;
+            if (resolvedResolution && lastRenderedResolution &&
+                resolvedResolution !== lastRenderedResolution &&
+                lastRenderedData.length > 0) {
+                const oldIdx = RES_ORDER.indexOf(lastRenderedResolution);
+                const newIdx = RES_ORDER.indexOf(resolvedResolution);
+                if (oldIdx >= 0 && newIdx >= 0) {
+                    transitionOpts = {
+                        type: newIdx > oldIdx ? 'zoom-in' : 'zoom-out',
+                        previousData: lastRenderedData,
+                        duration: 250
+                    };
+                    console.log(`[Transition] ${lastRenderedResolution} → ${resolvedResolution} (${transitionOpts.type})`);
+                }
+            }
+
+            renderMarksForLayer(dynamicLayer, binnedPackets, rScale, transitionOpts);
+
+            // Store current data for next transition comparison
+            if (resolvedResolution) {
+                lastRenderedResolution = resolvedResolution;
+                lastRenderedData = binnedPackets.map(d => ({
+                    src_ip: d.src_ip,
+                    bin_start: d.bin_start,
+                    bin_end: d.bin_end,
+                    binCenter: d.binCenter
+                }));
+            }
 
             // Re-draw sub-row arcs after circle rendering so they read
             // correct positions from freshly rendered DOM circles.
@@ -464,4 +501,12 @@ export function createTimeArcsZoomHandler(context) {
 export function clearZoomTimeouts() {
     clearTimeout(zoomTimeout);
     clearTimeout(handshakeTimeout);
+}
+
+/**
+ * Reset resolution transition tracking (call on IP change, data reload, etc.)
+ */
+export function resetResolutionTransitionState() {
+    lastRenderedResolution = null;
+    lastRenderedData = [];
 }

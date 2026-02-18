@@ -76,7 +76,8 @@ import {
 import {
     createTimeArcsZoomHandler,
     createDurationLabelUpdater,
-    clearZoomTimeouts
+    clearZoomTimeouts,
+    resetResolutionTransitionState
 } from './src/interaction/timearcsZoomHandler.js';
 import { createIPFilterController } from './src/interaction/ip-filter-controller.js';
 import { tryLoadFlowList, getFlowListLoader } from './src/data/flow-list-loader.js';
@@ -606,7 +607,7 @@ function onCircleClearHighlight() {
 }
 
 // Wrapper to call imported renderCircles with required options and event handlers
-function renderCirclesWithOptions(layer, binned, rScale) {
+function renderCirclesWithOptions(layer, binned, rScale, transitionOpts) {
     const data = collapseSubRowsBins(binned, state.layout.collapsedIPs);
     const processed = renderCircles(layer, data, {
         xScale,
@@ -627,14 +628,15 @@ function renderCirclesWithOptions(layer, binned, rScale) {
         d3,
         separateFlags: state.ui.separateFlags,
         onCircleHighlight,
-        onCircleClearHighlight
+        onCircleClearHighlight,
+        transitionOpts
     });
 
 }
 
 // Unified render function
-function renderMarksForLayerLocal(layer, data, rScale) {
-    return renderCirclesWithOptions(layer, data, rScale);
+function renderMarksForLayerLocal(layer, data, rScale, transitionOpts) {
+    return renderCirclesWithOptions(layer, data, rScale, transitionOpts);
 }
 
 // Size legend moved to control panel; update it there
@@ -943,6 +945,11 @@ function setupWindowResizeHandler() {
             // Resize main SVG
             svg.attr('width', width + chartMarginLeft + chartMarginRight)
                .attr('height', height + 100); // Extra space for bottom margin
+
+            // Keep zoom-capture rect in sync with new dimensions
+            svg.select('.zoom-capture')
+                .attr('width', width)
+                .attr('height', height);
 
             // Update scales with new width
             if (xScale && state.data.timeExtent) {
@@ -3880,6 +3887,7 @@ function visualizeTimeArcs(packets) {
     d3.select("#chart").html("");
     document.getElementById('loadingMessage').style.display = 'none';
     isInitialResolutionLoad = true;
+    resetResolutionTransitionState();
 
     if (!packets || packets.length === 0) {
         document.getElementById('loadingMessage').textContent = 'No data to visualize.';
@@ -4099,7 +4107,11 @@ function visualizeTimeArcs(packets) {
         scaleExtent: [1, 1e9],
         onZoom: zoomed
     });
-    zoomTarget = svgContainer;
+    // Attach zoom to inner svg group (not outer svgContainer) so D3's
+    // pointer-anchored zoom uses the circle coordinate system (post-margin).
+    // A transparent .zoom-capture rect in svgSetup.js ensures the <g>
+    // receives pointer events even in empty areas.
+    zoomTarget = svg;
     zoomTarget.call(zoom);
 
     // 16. Enable drag-to-reorder for IP rows

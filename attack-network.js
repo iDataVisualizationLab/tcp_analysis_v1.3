@@ -441,10 +441,11 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
           return;
         }
 
-        // Re-render with current filter state (filtered or unfiltered)
-        // applyAttackFilter will render originalData if all attacks visible,
-        // or filter and render if some attacks are hidden
-        applyAttackFilter();
+        // Lightweight rescale — stretch timeline, no layout recompute
+        if (timearcsLayout) {
+          timearcsLayout.updateWidth();
+          width = timearcsLayout._width;  // sync module-level width
+        }
 
         console.log('Window resize handling complete');
 
@@ -1288,7 +1289,13 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
           height = timearcsLayout._height;
           // Rebuild legend with attacks from this render
           const attacks = timearcsLayout._attacks || [];
-          visibleAttacks = new Set(attacks);
+          // Only reset visibleAttacks on the very first render (empty = uninitialized).
+          // onRenderComplete fires from a D3 transition callback — asynchronously after
+          // await render() resolves — so isRenderingFilteredData is already false by then.
+          // Mode switches reset visibleAttacks explicitly at lines ~1044, 1106, 1230.
+          if (visibleAttacks.size === 0) {
+            visibleAttacks = new Set(attacks);
+          }
           currentLabelMode = labelMode;
           buildLegend(attacks, ctx.colorForAttack);
           // Show force layout on initial load when it is the default mode

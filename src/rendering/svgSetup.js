@@ -32,6 +32,16 @@ export function createSVGStructure(options) {
     const svg = svgContainer.append('g')
         .attr('transform', `translate(${margin.left},${margin.top})`);
 
+    // Transparent rect to capture pointer events for zoom/pan.
+    // Without this, the <g> element only receives events on its painted children,
+    // leaving gaps where scroll-to-zoom wouldn't work.
+    svg.append('rect')
+        .attr('class', 'zoom-capture')
+        .attr('width', width)
+        .attr('height', height)
+        .style('fill', 'none')
+        .style('pointer-events', 'all');
+
     // Create clip path for content bounds
     svg.append('defs').append('clipPath')
         .attr('id', 'clip')
