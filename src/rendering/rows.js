@@ -123,15 +123,13 @@ export function createLabelHoverHandler(config) {
       .attr('stroke-width', s => s && s.ip && connectedIps.has(s.ip) ? 1 : 0.4);
 
     // Highlight IP labels for connected IPs
-    const hoveredLabel = d3.select(this);
-    const hoveredColor = hoveredLabel.style('fill') || '#343a40';
     svg.selectAll('.ip-label')
-      .attr('font-weight', s => connectedIps.has(s) ? 'bold' : null)
-      .style('font-size', s => connectedIps.has(s) ? '12px' : null)
-      .style('fill', s => {
-        if (s === hoveredIp) return hoveredColor;
-        return connectedIps.has(s) ? '#007bff' : '#343a40';
+      .attr('font-weight', s => {
+        if (s === hoveredIp) return 'bold';
+        return connectedIps.has(s) ? '500' : null;
       })
+      .style('font-size', s => connectedIps.has(s) ? '14px' : null)
+      .style('fill', s => connectedIps.has(s) ? '#000' : '#343a40')
       .style('opacity', s => {
         // Always show labels for connected IPs
         if (connectedIps.has(s)) return 1;
@@ -146,8 +144,7 @@ export function createLabelHoverHandler(config) {
           }
         }
 
-        // Otherwise preserve current opacity (don't change it)
-        return null; // null means don't change
+        return 0.25;
       });
 
     // Show tooltip with IP information

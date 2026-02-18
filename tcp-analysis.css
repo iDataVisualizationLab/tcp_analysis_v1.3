@@ -291,10 +291,10 @@ label {
 }
 .node-label.highlighted {
     font-weight: bold;
-    fill: #1971c2;
+    fill: #000;
 }
 .node-label.connected {
-    fill: #1971c2;
+    fill: #000;
     font-weight: 500;
 }
 

@@ -573,6 +573,38 @@ function syncSubRowHighlights(svgEl, st) {
     });
 }
 
+// Circle hover: highlight source/destination IP rows and labels
+function onCircleHighlight(srcIp, dstIps) {
+    // Bold source label, mark destination labels, fade others
+    svg.selectAll('.node-label')
+        .classed('highlighted', d => d === srcIp)
+        .classed('connected', d => dstIps.has(d))
+        .classed('faded', d => d !== srcIp && !dstIps.has(d));
+
+    // Grey row backgrounds for source and destination rows
+    svg.selectAll('.row-highlight')
+        .classed('self', d => d === srcIp)
+        .classed('active', d => dstIps.has(d));
+
+    // Sub-row highlights for expanded multi-pair IPs
+    svg.selectAll('.sub-row-highlight')
+        .classed('self', d => d && d.ip === srcIp)
+        .classed('active', d => d && dstIps.has(d.ip));
+}
+
+function onCircleClearHighlight() {
+    svg.selectAll('.node-label')
+        .classed('highlighted', false)
+        .classed('connected', false)
+        .classed('faded', false);
+    svg.selectAll('.row-highlight')
+        .classed('self', false)
+        .classed('active', false);
+    svg.selectAll('.sub-row-highlight')
+        .classed('self', false)
+        .classed('active', false);
+}
+
 // Wrapper to call imported renderCircles with required options and event handlers
 function renderCirclesWithOptions(layer, binned, rScale) {
     const data = collapseSubRowsBins(binned, state.layout.collapsedIPs);
@@ -593,7 +625,9 @@ function renderCirclesWithOptions(layer, binned, rScale) {
         createTooltipHTML,
         FLAG_CURVATURE,
         d3,
-        separateFlags: state.ui.separateFlags
+        separateFlags: state.ui.separateFlags,
+        onCircleHighlight,
+        onCircleClearHighlight
     });
 
 }

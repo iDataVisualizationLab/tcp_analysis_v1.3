@@ -48,7 +48,9 @@ export function renderCircles(layer, binned, options) {
         createTooltipHTML,
         FLAG_CURVATURE,
         d3,
-        separateFlags = false
+        separateFlags = false,
+        onCircleHighlight = null,
+        onCircleClearHighlight = null
     } = options;
 
     if (!layer) return;
@@ -278,6 +280,11 @@ export function renderCircles(layer, binned, options) {
                         }
                     });
                     tooltip.style('display', 'block').html(createTooltipHTML(d));
+                    // Highlight source/destination IP labels and rows
+                    if (onCircleHighlight) {
+                        const dstIps = new Set(pairsToArc.map(p => p.dst_ip));
+                        onCircleHighlight(d.src_ip, dstIps);
+                    }
                 })
                 .on('mousemove', e => { tooltip.style('left', `${e.pageX + 40}px`).style('top', `${e.pageY - 40}px`); })
                 .on('mouseout', e => {
@@ -285,6 +292,7 @@ export function renderCircles(layer, binned, options) {
                     dot.classed('highlighted', false).style('stroke', null).style('stroke-width', null);
                     const baseR = +dot.attr('data-orig-r') || RADIUS_MIN; dot.attr('r', baseR);
                     mainGroup.selectAll('.hover-arc').remove(); tooltip.style('display', 'none');
+                    if (onCircleClearHighlight) onCircleClearHighlight();
                 }),
             update => update
                 .attr('class', d => `direction-dot ${d.binned && d.count > 1 ? 'binned' : ''}`)

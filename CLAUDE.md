@@ -38,7 +38,7 @@ The `index.html` redirects to `attack-network.html` by default.
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Main Visualizations                                     │
-│  attack-network.js (~3900 LOC)   - Arc network view      │
+│  attack-network.js (~2000 LOC)   - Arc network view      │
 │  tcp-analysis.js (~4600 LOC)     - Packet analysis view  │
 └──────────────────────────┬──────────────────────────────┘
                            │
@@ -58,22 +58,27 @@ The `index.html` redirects to `attack-network.html` by default.
 │                                                          │
 │  rendering/   bars.js, circles.js, arcPath.js, rows.js   │
 │               arcInteractions.js, highlightUtils.js      │
-│               tooltip.js, svgSetup.js                    │
+│               tooltip.js, svgSetup.js, initialRender.js  │
 │  scales/      scaleFactory.js, distortion.js (fisheye)   │
+│               bifocal.js (focus+context layout math)     │
 │  layout/      forceSimulation.js, force_network.js       │
+│               timearcs_layout.js (~1600 LOC, class)      │
 │  interaction/ zoom.js, dragReorder.js, resize.js         │
 │  data/        binning.js (visible packets, bar width calc) │
 │               csvParser.js, flowReconstruction.js        │
 │               resolution-manager.js, data-source.js      │
-│               component-loader.js, csv-resolution-manager.js
+│               component-loader.js, csv-resolution-manager.js│
 │               aggregation.js, flow-loader.js             │
 │               flow-list-loader.js (lazy CSV loading)     │
+│               adaptive-overview-loader.js                │
+│               packet-filter.js, flow-data-handler.js     │
 │  tcp/         flags.js (TCP flag classification)         │
 │  groundTruth/ groundTruth.js (attack event loading)      │
 │  mappings/    decoders.js, loaders.js                    │
 │  workers/     packetWorkerManager.js                     │
 │  plugins/     d3-fisheye.js                              │
-│  ui/          legend.js                                  │
+│  ui/          legend.js, bifocal-handles.js              │
+│               loading-indicator.js                       │
 │  utils/       formatters.js, helpers.js                  │
 │  config/      constants.js                               │
 └──────────────────────────────────────────────────────────┘
@@ -168,10 +173,22 @@ The code auto-detects format from `manifest.json` and loads appropriately.
 
 ### Two Main Visualization Files
 
-- `attack-network.js` (~3900 LOC) - Arc network view with force-directed IP layout
+- `attack-network.js` (~2000 LOC) - Arc network view orchestrator (data loading, mode switching, UI wiring)
 - `tcp-analysis.js` (~4600 LOC) - Detailed packet analysis with stacked bars
 
-Both are monolithic files that compose modules from `/src`. They maintain extensive internal state (IP positions, selections, zoom state) and trigger re-renders on state changes.
+Both compose modules from `/src` and maintain extensive internal state (IP positions, selections, zoom state).
+
+### TimearcsLayout Class
+
+`src/layout/timearcs_layout.js` (~1600 LOC) encapsulates the timearcs arc visualization, extracted from `attack-network.js`. Mirrors the `ForceNetworkLayout` pattern: one class with constructor options, separate `setData()` and `render()` calls, and pull-based context retrieval via callbacks.
+
+Key responsibilities:
+- Force simulation setup (component separation, hub attraction, y-constraints)
+- Arc rendering with gradient coloring by attack type
+- IP label layout and hover highlighting
+- Bifocal (focus+context) lens distortion
+- Drag-to-brush selection system
+- Animated transitions between layout modes
 
 **Loading Bar** (`tcp-analysis.html`, `tcp-analysis.css`):
 - A progress bar is shown in `tcp-analysis.html` while data is loading on page open
@@ -365,6 +382,17 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 - Hovering an IP row uses grey shades (not blue/yellow)
 - Highlights all bins in the row that belong to the hovered IP pair, not just the first matching bin
 
+**IP Label Hover Styling** (consistent across all views):
+- Hovered IP: bold, black (`#000`)
+- Connected IPs: font-weight 500, black (`#000`)
+- Non-connected IPs: faded to opacity 0.25
+- Applied in `timearcs_layout.js`, `rows.js` (TCP Analysis), and `tcp-analysis.css`
+
+**Circle Hover Callbacks** (`circles.js`):
+- `onCircleHighlight(srcIp, dstIps)` — called on circle mouseover; highlights source/destination IP rows and labels
+- `onCircleClearHighlight()` — called on circle mouseout; clears all highlights
+- TCP Analysis wires these via `renderCirclesWithOptions()` to apply `.highlighted`, `.connected`, `.faded` CSS classes
+
 **Arc Path Connections** (`src/rendering/arcPath.js`):
 - `arcPathGenerator()` accepts optional `srcY` and `dstY` for offset positions
 - Hover handlers calculate both source and destination offsets using `calculateYPosWithOffset()`
@@ -386,7 +414,7 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 
 ### Force-Directed Layout
 
-- **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints
+- **TimeArcs** (`src/layout/timearcs_layout.js`): Complex multi-force simulation with component separation, hub attraction, y-constraints
 - **Force Network** (`src/layout/force_network.js`): 2D force layout used as the **default view mode** in TimeArcs. Aggregates arc data by IP pair + attack type, renders with D3 force simulation. Supports `precalculate()` for pre-computing positions (used during animated transitions) and `staticStart` rendering. On data load, the timearcs render completes first, then auto-transitions to force layout via `transitionToForceLayout()`
 - **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
 
@@ -441,12 +469,12 @@ The fisheye lens effect (`src/plugins/d3-fisheye.js`, wrapped by `src/scales/dis
 Main files import heavily from `/src`:
 - **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`, `highlightUtils.js`, `svgSetup.js`
 - **Data**: `binning.js` (visible packets, bar width), `flowReconstruction.js`, `csvParser.js`, `aggregation.js`, `resolution-manager.js`, `csv-resolution-manager.js`, `data-source.js`, `component-loader.js`, `initialRender.js`
-- **Layout**: `forceSimulation.js`, `force_network.js`
+- **Layout**: `forceSimulation.js`, `force_network.js`, `timearcs_layout.js`
 - **Interaction**: `zoom.js`, `arcInteractions.js`, `dragReorder.js`, `resize.js`
-- **Scales**: `scaleFactory.js`, `distortion.js`
+- **Scales**: `scaleFactory.js`, `distortion.js`, `bifocal.js`
 - **Ground Truth**: `groundTruth.js`
 - **Utils**: `formatters.js` (byte/timestamp formatting), `helpers.js`
-- **UI**: `legend.js`
+- **UI**: `legend.js`, `bifocal-handles.js`, `loading-indicator.js`
 - **Config**: `constants.js` (colors, sizes, debug flags)
 
 ## Original TimeArcs Source

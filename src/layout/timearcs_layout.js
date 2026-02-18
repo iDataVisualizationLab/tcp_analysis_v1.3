@@ -821,14 +821,14 @@ export class TimearcsLayout {
           svg.selectAll('.row-line')
             .attr('stroke-opacity', s => s && s.ip && connectedIps.has(s.ip) ? 0.8 : 0.1)
             .attr('stroke-width', s => s && s.ip && connectedIps.has(s.ip) ? 1 : 0.4);
-          const hoveredColor = d3.select(this).style('fill') || '#343a40';
           svg.selectAll('.ip-label')
-            .attr('font-weight', s => connectedIps.has(s) ? 'bold' : null)
+            .attr('font-weight', s => {
+              if (s === hoveredIp) return 'bold';
+              return connectedIps.has(s) ? '500' : null;
+            })
             .style('font-size', s => connectedIps.has(s) ? '14px' : null)
-            .style('fill', s => {
-              if (s === hoveredIp) return hoveredColor;
-              return connectedIps.has(s) ? '#007bff' : '#343a40';
-            });
+            .style('fill', s => connectedIps.has(s) ? '#000' : '#343a40')
+            .style('opacity', s => connectedIps.has(s) ? null : 0.25);
           const content = `IP: ${hoveredIp}<br>Connected arcs: ${connectedArcs.length}<br>Unique connections: ${new Set(connectedArcs.map(l => l.sourceNode.name === hoveredIp ? l.targetNode.name : l.sourceNode.name)).size}`;
           showTooltip(this._tooltip, event, content);
         }.bind(this))
