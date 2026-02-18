@@ -63,11 +63,6 @@ export function initControlPanel(options) {
     const resetBtn = document.getElementById('resetView');
     if (resetBtn) {
         resetBtn.style.position = '';
-        resetBtn.style.width = '100%';
-        resetBtn.style.margin = '0';
-        resetBtn.style.padding = '10px 0';
-        resetBtn.style.borderTop = '1px solid #eee';
-        resetBtn.style.borderRadius = '0 0 6px 6px';
         if (options && typeof options.onResetView === 'function') {
             resetBtn.onclick = options.onResetView;
         }
@@ -411,12 +406,12 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
 
             // Build button HTML based on whether packet data is available for this flow
             const viewBtnHTML = flowHasPacketData
-                ? `<button class=\"flow-view-btn\" data-flow-id=\"${flow.id}\" style=\"padding:2px 8px; font-size:10px; border:1px solid #2196F3; border-radius:3px; background:#2196F3; color:white; cursor:pointer; font-weight:bold;\" title=\"View packets with arcs\">📊 View Packets</button>`
-                : `<button class=\"flow-view-btn\" data-flow-id=\"${flow.id}\" style=\"padding:2px 8px; font-size:10px; border:1px solid #ccc; border-radius:3px; background:#eee; color:#999; cursor:not-allowed; font-weight:bold;\" title=\"Packet data not available (summary mode)\" disabled>📊 View Packets</button>`;
+                ? `<button class=\"flow-view-btn cp-btn cp-btn-primary\" data-flow-id=\"${flow.id}\" title=\"View packets with arcs\">📊 View Packets</button>`
+                : `<button class=\"flow-view-btn cp-btn\" data-flow-id=\"${flow.id}\" title=\"Packet data not available (summary mode)\" disabled>📊 View Packets</button>`;
 
             const exportBtnHTML = flowHasPacketData
-                ? `<button class=\"flow-export-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ced4da; border-radius:3px; background:#fff; cursor:pointer;\">Export CSV</button>`
-                : `<button class=\"flow-export-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ccc; border-radius:3px; background:#eee; color:#999; cursor:not-allowed;\" title=\"Packet data not available (summary mode)\" disabled>Export CSV</button>`;
+                ? `<button class=\"flow-export-btn cp-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto;\">Export CSV</button>`
+                : `<button class=\"flow-export-btn cp-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto;\" title=\"Packet data not available (summary mode)\" disabled>Export CSV</button>`;
 
             item.innerHTML = `
                 <input type=\"checkbox\" class=\"flow-checkbox\" id=\"flow-${flow.id}\" ${selectedFlowIds.has(String(flow.id)) ? 'checked' : ''}>
@@ -701,7 +696,7 @@ export function createFlowList(flows, selectedFlowIds, formatBytes, formatTimest
                 <span>${formatBytes(flow.totalBytes)}</span>
                 <span>${duration}s duration</span>
                 <span>${closeTypeText}</span>
-                <button class="flow-export-btn" data-flow-id="${flow.id}" style="margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ced4da; border-radius:3px; background:#fff; cursor:pointer;">Export CSV</button>
+                <button class="flow-export-btn cp-btn" data-flow-id="${flow.id}" style="margin-left:auto;">Export CSV</button>
               </div>
               <div style="font-size:10px; color:#999; margin-top:3px;">Start: ${startTime} • End: ${endTime}</div>
             </div>

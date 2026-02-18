@@ -66,8 +66,8 @@
             <div id="ipSelector" style="border: 1px solid #dee2e6; padding: 10px; background: white; border-radius: 4px;">
                 <div style="margin-bottom: 10px;">
                     <input type="text" id="ipSearch" placeholder="Search IP addresses..." style="width: 100%; padding: 5px; margin-bottom: 10px; border: 1px solid #ced4da; border-radius: 3px;">
-                    <button id="selectAllIPs" style="margin-right: 10px;">Select All</button>
-                    <button id="clearAllIPs">Clear All</button>
+                    <button id="selectAllIPs" class="cp-btn" style="margin-right: 6px;">Select All</button>
+                    <button id="clearAllIPs" class="cp-btn">Clear All</button>
                 </div>
                 <div id="ipCheckboxes" style="max-height: 200px; overflow-y: auto;"></div>
             </div>
@@ -139,7 +139,7 @@
                 </div>
             </div>
         </div>
-        <button id="resetView">Reset View</button>
+        <button id="resetView" class="cp-btn">Reset View</button>
         </div>
       </aside>
     <div id="tooltip" class="tooltip" style="display: none;"></div>
@@ -153,13 +153,13 @@
             <div class="modal-body">
                 <div style="margin-bottom:8px; display:flex; gap:8px; align-items:center;">
                     <input type="text" id="flowListModalSearch" placeholder="Search flows..." style="flex:1; padding:6px; border:1px solid #ced4da; border-radius:4px;">
-                    <button id="flowListModalSelectAll" class="modal-primary-btn" title="Select all flows in this list">Select All</button>
-                    <button id="flowListModalClearAll" class="modal-close-btn" title="Clear selection for this list">Clear All</button>
+                    <button id="flowListModalSelectAll" class="cp-btn cp-btn-primary" title="Select all flows in this list">Select All</button>
+                    <button id="flowListModalClearAll" class="cp-btn" title="Clear selection for this list">Clear All</button>
                 </div>
                 <div id="flowListModalList" style="max-height:60vh; overflow:auto; border:1px solid #e9ecef; border-radius:6px; padding:6px; background:#fff;"></div>
             </div>
             <div class="modal-actions">
-                <button id="flowListModalClose" class="modal-close-btn">Close</button>
+                <button id="flowListModalClose" class="cp-btn">Close</button>
             </div>
         </div>
     </div>

@@ -196,10 +196,18 @@ Key responsibilities:
 
 ### Overview Bar chart
 
-The `overview_chart.js` module (~900 LOC) provides:
+The `overview_chart.js` module (~1100 LOC) provides:
 - Stacked bar overview of invalid flows by reason (the **Overview Bar chart**)
 - Brush-based time range selection synced with Packet View zoom
-- Legend integration for filtering by invalid reason/close type
+- Legend integration: clicking a legend item **hides/shows bars of that category and recomputes bar heights** based on the remaining visible data's max
+
+**Legend filter behavior** (`overview_chart.js`):
+- Module-level `overviewHiddenReasons` (Set) and `overviewHiddenCloseTypes` (Set) track legend-toggled visibility; these persist across chart recreations (e.g. IP filter changes)
+- Clicking a legend item toggles the appropriate set then calls `recomputeOverviewBars()`
+- `recomputeOverviewBars()` dispatches to `_recomputeFlows()` or `_recomputeAdaptive()` based on which rendering path is active
+- Two-pass recompute: (1) compute new `sharedMax` from visible-only categories, (2) restack y-positions per bin from scratch — required because stacking means hiding one bar shifts its neighbors
+- `_applyPositions()` applies results: `display:none` for hidden segments, animated 200ms y/height transitions for visible ones
+- Both the overview-local sets AND the main-app filter sets (`hiddenInvalidReasonsRef`/`hiddenCloseTypesRef`) are considered; `updateOverviewInvalidVisibility()` now calls `recomputeOverviewBars()` instead of CSS-only show/hide
 
 **Current Implementation** (Multi-resolution adaptive loading):
 - `tcp-analysis.js` initializes `AdaptiveOverviewLoader` from `flow_bins_index.json`
@@ -412,6 +420,27 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 // collapsedIPs: Set<ip> - IPs whose sub-rows are collapsed
 ```
 
+### Circle View Modes (TCP Analysis)
+
+**Separate Flags** (`#separateFlags` checkbox, `state.ui.separateFlags`):
+- Prevents overlapping circles of different flag types at the same time bin
+- Groups co-located circles by `(binCenter, yPosWithOffset)`, sorts by TCP lifecycle phase order (`FLAG_PHASE_ORDER`: SYN → SYN+ACK → ACK → PSH → FIN → RST → OTHER), then spreads them vertically within the available sub-row height
+- Implemented in `src/rendering/circles.js:157-191`
+- Named "Separate Flags" in the UI (not "Stacked Circles" — avoid that term)
+- Default: off (`separateFlags: false` in `tcp-analysis.js:252`)
+
+### Link Rendering (TCP Analysis Packet View)
+
+Three types of arc links connect circles in the Packet View:
+
+1. **Hover arcs** (temporary) — drawn on circle mouseover in `circles.js:228-281`. Colored arc from source to destination IP at the circle's actual sub-row offset position. Includes SVG `<marker>` arrowhead at the destination end. Removed on mouseout.
+
+2. **Sub-row arcs** (`#showSubRowArcs` toggle, `state.ui.showSubRowArcs`) — persistent low-opacity arcs connecting IP pair sub-rows. Drawn by `drawSubRowArcs()` in `tcp-analysis.js`. Toggled via Control Panel checkbox.
+
+3. **TCP Flow arcs** (`#showTcpFlows` toggle, `state.ui.showTcpFlows`) — persistent arcs for selected TCP flows, drawn by `drawSelectedFlowArcs()` in `tcp-analysis.js:1654-1758`. Grouped by time bucket, src/dst IP pair, and flag type. Phase filters (establishment/data transfer/closing) control which flows are shown.
+
+Note: Auto-enabling links at raw zoom level (as in the original requirements) is **not yet implemented**.
+
 ### Force-Directed Layout
 
 - **TimeArcs** (`src/layout/timearcs_layout.js`): Complex multi-force simulation with component separation, hub attraction, y-constraints
@@ -439,6 +468,11 @@ Drag-to-brush selection allows users to select arcs/nodes for analysis and expor
 - `getLinkHighlightInfo()` — compute active IPs and attack color from link datum (handles both timearcs arc shape and force link shape)
 - `highlightEndpointLabels()` / `unhighlightEndpointLabels()` — bold, enlarge, color active IP labels; dim others
 - `ipFromDatum()` (internal) — normalizes datum to IP string (timearcs labels bind raw strings, force layout nodes bind `{id, degree}` objects)
+- `showArcArrowhead(container, pathElement, datum, color)` — renders a filled polygon arrowhead on a hovered timearcs arc, positioned at the arc midpoint
+- `showLineArrowhead(container, datum, color, targetRadius, strokeWidth)` — renders a directional arrowhead on a hovered force-layout link; returns base position so the line can be trimmed to not overlap the arrow
+- `removeArrowheads(container)` — cleans up arrowhead overlays on mouseout
+
+**Directional arrows** appear on mouseover only (not permanently, to avoid clutter). Both timearcs arcs (`arcInteractions.js:74-75`) and force layout links (`force_network.js:438-454`) call these. In the TCP Analysis Packet View, `circles.js` uses SVG `<marker>` definitions (`marker-end`) to draw arrowheads on hover arcs between circles.
 
 ### Control Panel
 

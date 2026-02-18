@@ -35,6 +35,24 @@ let getSelectedIPsRef = null; // Get currently selected IP addresses
 let flagColors = {};
 let flowColors = {};
 
+// State retained for dynamic bar recomputation when legend filters change
+let overviewBinReasonMap = null;      // Map<binIndex, Map<reason, flows[]>>
+let overviewBinCloseMap = null;       // Map<binIndex, Map<closeType, flows[]>>
+let overviewBinOngoingMap = null;     // Map<binIndex, Map<ongoingType, flows[]>>
+let overviewStoredBinCount = 0;
+let overviewStoredAxisY = 0;
+let overviewStoredBandHeight = 0;
+let overviewStoredChartHeightUpOngoing = 0;
+let overviewStoredInvalidAxisGap = 6;
+let overviewStoredReasons = [];
+let overviewStoredClosingTypes = ['graceful', 'abortive'];
+let overviewStoredOngoingTypes = ['open', 'incomplete'];
+let overviewAdaptiveBins = null;           // set when using adaptive path
+let overviewAdaptiveInvalidReasonOrder = [];
+// Legend-driven visibility (independent of main-app filter sets)
+const overviewHiddenReasons = new Set();
+const overviewHiddenCloseTypes = new Set();
+
 export function initOverview(options) {
     d3Ref = options.d3;
     applyZoomDomainRef = options.applyZoomDomain;
@@ -240,6 +258,13 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
         m.set(t, arr);
     }
 
+    // Retain bin maps for dynamic legend-filter recomputation
+    overviewBinReasonMap = binReasonMap;
+    overviewBinCloseMap = binCloseMap;
+    overviewBinOngoingMap = binOngoingMap;
+    overviewStoredBinCount = binCount;
+    overviewAdaptiveBins = null; // clear adaptive path state
+
     // Compute per-bin totals and global max per direction
     let maxBinTotalInvalid = 0;
     const binTotalsInvalid = new Map();
@@ -283,7 +308,19 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
     const brushTopY = overviewHeight - 4; // top of brush selection area
     // Push invalid bars down without reducing their total height
     const invalidAxisGap = 6; // pixels of vertical offset below the axis
-    const chartHeightDown = Math.max(6, brushTopY - axisY - 4); // full available height
+    // Bars start at axisY + invalidAxisGap, so subtract it to prevent overflow into brush handles
+    const chartHeightDown = Math.max(6, brushTopY - axisY - invalidAxisGap - 4);
+    // Shared scale: equal counts produce equal pixel heights across closing and invalid bands
+    const bandHeight = Math.min(chartHeightUpClosing, chartHeightDown);
+
+    // Retain layout params for dynamic recomputation
+    overviewStoredAxisY = axisY;
+    overviewStoredBandHeight = bandHeight;
+    overviewStoredChartHeightUpOngoing = chartHeightUpOngoing;
+    overviewStoredInvalidAxisGap = invalidAxisGap;
+    overviewStoredReasons = reasons;
+    overviewStoredClosingTypes = closingTypes;
+    overviewStoredOngoingTypes = ongoingTypes;
 
     // Colors for closing types (top)
     const closeColors = {
@@ -314,7 +351,7 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
                 const arr = mTop.get(t) || [];
                 const count = arr.length;
                 if (count === 0) continue;
-                const h = (count / sharedMax) * chartHeightUpClosing;
+                const h = (count / sharedMax) * bandHeight;
                 yTop -= h;
                 segments.push({
                     kind: 'closing', closeType: t, reason: null,
@@ -368,7 +405,7 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
                 const arr = mBot.get(reason) || [];
                 const count = arr.length;
                 if (count === 0) continue;
-                const h = (count / sharedMax) * chartHeightDown;
+                const h = (count / sharedMax) * bandHeight;
                 const y = yBottom; // start at baseline and grow downward
                 yBottom += h;
                 segments.push({
@@ -388,9 +425,9 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
         const upTotalClose = (binTotalsClosing && binTotalsClosing.get) ? (binTotalsClosing.get(binIndex) || 0) : 0;
         const upTotalOngoing = (binTotalsOngoing && binTotalsOngoing.get) ? (binTotalsOngoing.get(binIndex) || 0) : 0;
         const downTotal = (binTotalsInvalid && binTotalsInvalid.get) ? (binTotalsInvalid.get(binIndex) || 0) : 0;
-        const upHeightClose = (upTotalClose / Math.max(1, sharedMax)) * chartHeightUpClosing;
+        const upHeightClose = (upTotalClose / Math.max(1, sharedMax)) * bandHeight;
         const upHeightOngoing = (upTotalOngoing / Math.max(1, sharedMax)) * chartHeightUpOngoing;
-        const downHeight = (downTotal / Math.max(1, sharedMax)) * chartHeightDown;
+        const downHeight = (downTotal / Math.max(1, sharedMax)) * bandHeight;
 
         // Allow extra magnification for very small bands so thin bars are visible
         const smallBandBoost = (hPx, baseCap) => {
@@ -406,7 +443,7 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
             upHeightClose > 0
                 ? Math.min(
                     smallBandBoost(upHeightClose, targetSy),
-                    chartHeightUpClosing / Math.max(1e-6, upHeightClose)
+                    bandHeight / Math.max(1e-6, upHeightClose)
                   )
                 : 1.0
         );
@@ -424,7 +461,7 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
             downHeight > 0
                 ? Math.min(
                     smallBandBoost(downHeight, targetSy),
-                    chartHeightDown / Math.max(1e-6, downHeight)
+                    bandHeight / Math.max(1e-6, downHeight)
                   )
                 : 1.0
         );
@@ -785,38 +822,16 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
             hiddenCloseTypes: hiddenCloseTypesRef,
             d3: d3,
             onToggleReason: (reason) => {
-                // Filter flows by invalid reason and populate flow list
-                const allFlows = getCurrentFlowsRef();
-                const filteredFlows = allFlows.filter(f => {
-                    if (!f) return false;
-                    const fReason = f.invalidReason;
-                    if (fReason && fReason === reason) return true;
-                    if (!fReason && (f.closeType === 'invalid' || f.state === 'invalid') && reason === 'unknown_invalid') return true;
-                    return false;
-                });
-                
-                if (typeof createFlowListRef === 'function') {
-                    createFlowListRef(filteredFlows);
-                }
-                try { showFlowListModal(); } catch {}
+                if (overviewHiddenReasons.has(reason)) overviewHiddenReasons.delete(reason);
+                else overviewHiddenReasons.add(reason);
+                recomputeOverviewBars();
+                updateOverviewLegendOpacity();
             },
             onToggleCloseType: (closeType) => {
-                // Filter flows by close type and populate flow list
-                const allFlows = getCurrentFlowsRef();
-                const filteredFlows = allFlows.filter(f => {
-                    if (!f) return false;
-                    if (closeType === 'open') {
-                        return f && !(f.closeType === 'invalid' || f.state === 'invalid' || !!f.invalidReason) && 
-                               !(f.closeType === 'graceful' || f.closeType === 'abortive') &&
-                               (f.establishmentComplete === true || f.state === 'established' || f.state === 'data_transfer');
-                    }
-                    return f.closeType === closeType;
-                });
-                
-                if (typeof createFlowListRef === 'function') {
-                    createFlowListRef(filteredFlows);
-                }
-                try { showFlowListModal(); } catch {}
+                if (overviewHiddenCloseTypes.has(closeType)) overviewHiddenCloseTypes.delete(closeType);
+                else overviewHiddenCloseTypes.add(closeType);
+                recomputeOverviewBars();
+                updateOverviewLegendOpacity();
             }
         });
     } catch (error) {
@@ -829,431 +844,6 @@ export function createOverviewChart(packets, { timeExtent, width, margins }) {
     try { updateBrushFromZoom(); } catch (_) {}
 }
 
-/**
- * Create overview chart directly from pre-aggregated IP pair bin data.
- * This is the fast path that skips flow iteration and uses ip_pair_overview.json.
- *
- * @param {Object} pairOverview - The ip_pair_overview.json data
- * @param {Array} selectedIPs - Array of selected IP addresses
- * @param {Object} options - Chart options { timeExtent, width, margins }
- */
-export function createOverviewFromPairs(pairOverview, selectedIPs, options) {
-    const d3 = d3Ref;
-    if (!d3) {
-        console.error('[OverviewChart] d3Ref is not set! initOverview may not have been called.');
-        return;
-    }
-
-    const { timeExtent, width, margins } = options;
-    console.log(`[OverviewChart] createOverviewFromPairs called with ${selectedIPs.length} IPs, timeExtent:`, timeExtent);
-
-    d3.select('#overview-chart').html('');
-    const container = document.getElementById('overview-container');
-    if (container) container.style.display = 'block';
-
-    // Build selected pair keys
-    const selectedPairs = new Set();
-    for (let i = 0; i < selectedIPs.length; i++) {
-        for (let j = i + 1; j < selectedIPs.length; j++) {
-            const [a, b] = [selectedIPs[i], selectedIPs[j]].sort();
-            selectedPairs.add(`${a}<->${b}`);
-        }
-    }
-    console.log(`[OverviewChart] Looking for ${selectedPairs.size} IP pair combinations`);
-
-    // Extract metadata
-    const meta = pairOverview.meta;
-    const columns = meta.columns || ['bin', 'graceful', 'abortive', 'ongoing', 'open',
-        'rst_during_handshake', 'invalid_ack', 'invalid_synack',
-        'incomplete_no_synack', 'incomplete_no_ack', 'unknown_invalid'];
-
-    // Column indices (after bin index)
-    const colIdx = {};
-    columns.forEach((col, i) => { colIdx[col] = i; });
-
-    // Aggregate data across selected pairs
-    const binTotals = new Map(); // binIdx -> { graceful, abortive, ongoing, open, invalid: { reason: count } }
-
-    for (const pairKey of selectedPairs) {
-        const rows = pairOverview.pairs[pairKey];
-        if (!rows) continue;
-
-        for (const row of rows) {
-            const binIdx = row[0];
-
-            let totals = binTotals.get(binIdx);
-            if (!totals) {
-                totals = { graceful: 0, abortive: 0, ongoing: 0, open: 0, invalid: {} };
-                binTotals.set(binIdx, totals);
-            }
-
-            // Add counts from this row
-            totals.graceful += row[colIdx.graceful] || 0;
-            totals.abortive += row[colIdx.abortive] || 0;
-            totals.ongoing += row[colIdx.ongoing] || 0;
-            totals.open += row[colIdx.open] || 0;
-
-            // Invalid reasons
-            const invalidReasons = ['rst_during_handshake', 'invalid_ack', 'invalid_synack',
-                                   'incomplete_no_synack', 'incomplete_no_ack', 'unknown_invalid'];
-            for (const reason of invalidReasons) {
-                const count = row[colIdx[reason]] || 0;
-                if (count > 0) {
-                    totals.invalid[reason] = (totals.invalid[reason] || 0) + count;
-                }
-            }
-        }
-    }
-
-    console.log(`[OverviewChart] Aggregated ${binTotals.size} bins with data`);
-
-    // Chart layout (match createOverviewChart)
-    const chartMargins = margins || (getChartMarginsRef ? getChartMarginsRef() : { left: 150, right: 120, top: 80, bottom: 50 });
-    const legendHeight = 35;
-    const overviewMargin = { top: 15 + legendHeight, right: chartMargins.right, bottom: 30, left: chartMargins.left };
-    overviewWidth = Math.max(100, width);
-    overviewHeight = 100;
-
-    const overviewSvgContainer = d3.select('#overview-chart').append('svg')
-        .attr('width', overviewWidth + overviewMargin.left + overviewMargin.right)
-        .attr('height', overviewHeight + overviewMargin.top + overviewMargin.bottom);
-
-    overviewSvg = overviewSvgContainer.append('g')
-        .attr('transform', `translate(${overviewMargin.left},${overviewMargin.top})`);
-
-    overviewXScale = d3.scaleLinear().domain(timeExtent).range([0, overviewWidth]);
-
-    const binCount = meta.bin_count;
-    const binWidthUs = meta.bin_width_us;
-    const dataTimeStart = meta.time_start;
-
-    // Layout heights
-    const axisY = overviewHeight - 30;
-    const chartHeightUp = Math.max(10, axisY - 6);
-    const chartHeightUpOngoing = chartHeightUp * 0.45;
-    const chartHeightUpClosing = chartHeightUp - chartHeightUpOngoing;
-    const brushTopY = overviewHeight - 4;
-    const invalidAxisGap = 6;
-    const chartHeightDown = Math.max(6, brushTopY - axisY - 4);
-
-    // Colors (match createOverviewChart)
-    const closeColors = {
-        graceful: (flowColors.closing && flowColors.closing.graceful) || '#8e44ad',
-        abortive: (flowColors.closing && flowColors.closing.abortive) || '#c0392b'
-    };
-    const ongoingColors = {
-        open: (flowColors.ongoing && flowColors.ongoing.open) || '#6c757d',
-        incomplete: (flowColors.ongoing && flowColors.ongoing.incomplete) || '#adb5bd'
-    };
-    const invalidFlowColors = {
-        'invalid_ack': (flowColors.invalid && flowColors.invalid['invalid_ack']) || d3.color(flagColors['ACK'] || '#27ae60').darker(0.5).formatHex(),
-        'invalid_synack': (flowColors.invalid && flowColors.invalid['invalid_synack']) || d3.color(flagColors['SYN+ACK'] || '#f39c12').darker(0.5).formatHex(),
-        'rst_during_handshake': (flowColors.invalid && flowColors.invalid['rst_during_handshake']) || d3.color(flagColors['RST'] || '#34495e').darker(0.5).formatHex(),
-        'incomplete_no_synack': (flowColors.invalid && flowColors.invalid['incomplete_no_synack']) || d3.color(flagColors['SYN+ACK'] || '#f39c12').brighter(0.5).formatHex(),
-        'incomplete_no_ack': (flowColors.invalid && flowColors.invalid['incomplete_no_ack']) || d3.color(flagColors['ACK'] || '#27ae60').brighter(0.5).formatHex(),
-        'unknown_invalid': (flowColors.invalid && flowColors.invalid['unknown_invalid']) || d3.color(flagColors['OTHER'] || '#bdc3c7').darker(0.5).formatHex()
-    };
-
-    const invalidOrder = ['invalid_ack', 'rst_during_handshake', 'incomplete_no_synack',
-                         'incomplete_no_ack', 'invalid_synack', 'unknown_invalid'];
-    const closingTypes = ['graceful', 'abortive'];
-
-    // Compute max for scaling
-    let maxTotal = 0;
-    for (const [, totals] of binTotals) {
-        const closeTotal = totals.graceful + totals.abortive;
-        const ongoingTotal = totals.ongoing + totals.open;
-        const invalidTotal = Object.values(totals.invalid).reduce((a, b) => a + b, 0);
-        maxTotal = Math.max(maxTotal, closeTotal, ongoingTotal, invalidTotal);
-    }
-    const sharedMax = Math.max(1, maxTotal);
-
-    // Build segments
-    const segments = [];
-    const binTotalsClosing = new Map();
-    const binTotalsOngoing = new Map();
-    const binTotalsInvalid = new Map();
-
-    for (let i = 0; i < binCount; i++) {
-        const binStartTime = dataTimeStart + i * binWidthUs;
-        const binEndTime = binStartTime + binWidthUs;
-
-        // Skip bins outside the visible time extent
-        if (binEndTime < timeExtent[0] || binStartTime > timeExtent[1]) continue;
-
-        const x0 = overviewXScale(Math.max(binStartTime, timeExtent[0]));
-        const x1 = overviewXScale(Math.min(binEndTime, timeExtent[1]));
-        const widthPx = Math.max(1, x1 - x0);
-        const baseX = x0;
-
-        const totals = binTotals.get(i) || { graceful: 0, abortive: 0, ongoing: 0, open: 0, invalid: {} };
-
-        // Store per-bin totals for hover effects
-        binTotalsClosing.set(i, totals.graceful + totals.abortive);
-        binTotalsOngoing.set(i, totals.ongoing + totals.open);
-        binTotalsInvalid.set(i, Object.values(totals.invalid).reduce((a, b) => a + b, 0));
-
-        // Closing types (top band)
-        let yTop = axisY - chartHeightUpOngoing;
-        for (const t of closingTypes) {
-            const count = totals[t];
-            if (count === 0) continue;
-            const h = (count / sharedMax) * chartHeightUpClosing;
-            yTop -= h;
-            segments.push({
-                kind: 'closing', closeType: t, reason: null,
-                x: baseX, y: yTop, width: widthPx, height: h,
-                count, flows: [], binIndex: i, binStart: binStartTime, binEnd: binEndTime
-            });
-        }
-
-        // Ongoing types (middle band)
-        const centerY = axisY - (chartHeightUpOngoing / 2);
-        if (totals.open > 0) {
-            const h = (totals.open / sharedMax) * (chartHeightUpOngoing / 2);
-            segments.push({
-                kind: 'ongoing', closeType: 'open', reason: null,
-                x: baseX, y: centerY - h, width: widthPx, height: h,
-                count: totals.open, flows: [], binIndex: i, binStart: binStartTime, binEnd: binEndTime
-            });
-        }
-        if (totals.ongoing > 0) {
-            const h = (totals.ongoing / sharedMax) * (chartHeightUpOngoing / 2);
-            segments.push({
-                kind: 'ongoing', closeType: 'incomplete', reason: null,
-                x: baseX, y: centerY, width: widthPx, height: h,
-                count: totals.ongoing, flows: [], binIndex: i, binStart: binStartTime, binEnd: binEndTime
-            });
-        }
-
-        // Invalid types (bottom band)
-        let yBottom = axisY + invalidAxisGap;
-        for (const reason of invalidOrder) {
-            const count = totals.invalid[reason] || 0;
-            if (count === 0) continue;
-            const h = (count / sharedMax) * chartHeightDown;
-            segments.push({
-                kind: 'invalid', reason, closeType: null,
-                x: baseX, y: yBottom, width: widthPx, height: h,
-                count, flows: [], binIndex: i, binStart: binStartTime, binEnd: binEndTime
-            });
-            yBottom += h;
-        }
-    }
-
-    console.log(`[OverviewChart] Created ${segments.length} segments for rendering`);
-
-    // Amplify/reset functions (simplified from createOverviewChart)
-    const amplifyBinBand = (binIndex, bandKind) => {
-        const targetSy = 1.8;
-        overviewSvg.selectAll('.overview-stack-segment')
-            .filter(s => s.binIndex === binIndex && (!bandKind || s.kind === bandKind))
-            .transition().duration(140)
-            .attr('transform', s => {
-                const cx = s.x + s.width / 2;
-                const sy = targetSy;
-                const sx = s.kind === 'ongoing' ? 1.0 : 3.0;
-                const py = s.kind === 'closing' ? (axisY - chartHeightUpOngoing)
-                         : (s.kind === 'ongoing' ? (axisY - chartHeightUpOngoing / 2)
-                         : (axisY + invalidAxisGap));
-                return `translate(${cx},${py}) scale(${sx},${sy}) translate(${-cx},${-py})`;
-            })
-            .attr('stroke', 'none')
-            .attr('stroke-width', 0);
-    };
-
-    const resetBinBand = (binIndex, bandKind) => {
-        overviewSvg.selectAll('.overview-stack-segment')
-            .filter(s => s.binIndex === binIndex && (!bandKind || s.kind === bandKind))
-            .transition().duration(180)
-            .attr('transform', null)
-            .attr('stroke', '#ffffff')
-            .attr('stroke-width', 0.5);
-    };
-
-    // Create layer groups
-    const gInvalid = overviewSvg.append('g').attr('class', 'overview-group-invalid');
-    const gClosing = overviewSvg.append('g').attr('class', 'overview-group-closing');
-    const gOngoing = overviewSvg.append('g').attr('class', 'overview-group-ongoing');
-
-    const renderSegsInto = (groupSel, data) => groupSel
-        .selectAll('.overview-stack-segment')
-        .data(data)
-        .enter().append('rect')
-        .attr('class', 'overview-stack-segment')
-        .attr('x', d => d.x)
-        .attr('y', d => d.y)
-        .attr('width', d => d.width)
-        .attr('height', d => Math.max(1, d.height))
-        .attr('fill', d => d.kind === 'invalid' ? (invalidFlowColors[d.reason] || '#6c757d')
-                        : (d.kind === 'closing' ? (closeColors[d.closeType] || '#6c757d')
-                        : (ongoingColors[d.closeType] || '#6c757d')))
-        .attr('stroke', '#ffffff')
-        .attr('stroke-width', 0.5)
-        .attr('vector-effect', 'non-scaling-stroke')
-        .style('cursor', 'pointer')
-        .on('mouseover', (event, d) => amplifyBinBand(d.binIndex, d.kind))
-        .on('mouseout', (event, d) => resetBinBand(d.binIndex, d.kind))
-        .on('click', async (event, d) => {
-            // Load actual flows from chunks on demand
-            try {
-                const binStart = d.binStart;
-                const binEnd = d.binEnd;
-                console.log(`[OverviewClick] Bin click, loading flows for time range: ${binStart} - ${binEnd}`);
-
-                if (typeof loadChunksForTimeRangeRef === 'function') {
-                    showFlowListModal();
-                    const listContainer = document.getElementById('flowListModalList');
-                    if (listContainer) {
-                        listContainer.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">Loading flows...</div>';
-                    }
-
-                    const loadedFlows = await loadChunksForTimeRangeRef(binStart, binEnd);
-                    if (loadedFlows && loadedFlows.length > 0 && typeof createFlowListRef === 'function') {
-                        // Filter by band type
-                        let filteredFlows = loadedFlows;
-                        if (d.kind === 'closing') {
-                            filteredFlows = loadedFlows.filter(f => f && (f.closeType === 'graceful' || f.closeType === 'abortive'));
-                        } else if (d.kind === 'ongoing') {
-                            filteredFlows = loadedFlows.filter(f => f && !f.invalidReason && f.closeType !== 'invalid' &&
-                                f.closeType !== 'graceful' && f.closeType !== 'abortive');
-                        } else {
-                            filteredFlows = loadedFlows.filter(f => f && (f.closeType === 'invalid' || f.state === 'invalid' || f.invalidReason));
-                        }
-                        createFlowListRef(filteredFlows);
-                    }
-                }
-            } catch (e) {
-                console.warn('Failed to load flows on click:', e);
-            }
-        })
-        .append('title')
-        .text(d => {
-            if (d.kind === 'invalid') return `${d.count} invalid flow(s) (${d.reason})`;
-            if (d.kind === 'closing') return `${d.count} ${d.closeType} close(s)`;
-            return `${d.count} ${d.closeType} flow(s)`;
-        });
-
-    // Render segments
-    renderSegsInto(gInvalid, segments.filter(s => s.kind === 'invalid'));
-    renderSegsInto(gClosing, segments.filter(s => s.kind === 'closing'));
-
-    // Add time axis (at center of ongoing band)
-    const overviewXAxis = d3.axisBottom(overviewXScale)
-        .tickFormat(createFullRangeTickFormatter(timeExtent));
-
-    const timeAxisY = axisY - (chartHeightUpOngoing / 2);
-    overviewSvg.append('g')
-        .attr('class', 'overview-axis')
-        .attr('transform', `translate(0,${timeAxisY})`)
-        .call(overviewXAxis);
-
-    // Render ongoing on top of axis
-    renderSegsInto(gOngoing, segments.filter(s => s.kind === 'ongoing'));
-    try { gOngoing.raise(); } catch {}
-
-    // Add brush
-    const bandTop = overviewHeight - 4;
-    const bandBottom = overviewHeight;
-    overviewBrush = d3.brushX()
-        .extent([[0, bandTop], [overviewWidth, bandBottom]])
-        .on('brush end', brushed);
-
-    overviewSvg.append('g').attr('class', 'brush').call(overviewBrush);
-    // Disable pointer events on brush overlay so clicks can pass through to bars
-    overviewSvg.select('.brush .overlay').style('pointer-events', 'none');
-
-    // Initialize brush selection
-    isUpdatingFromZoom = true;
-    try {
-        const currentDomain = getCurrentDomainRef ? getCurrentDomainRef() : null;
-        const domainToUse = (currentDomain && currentDomain[0] !== undefined && currentDomain[1] !== undefined)
-            ? currentDomain : timeExtent;
-        const x0 = Math.max(0, Math.min(overviewWidth, overviewXScale(domainToUse[0])));
-        const x1 = Math.max(0, Math.min(overviewWidth, overviewXScale(domainToUse[1])));
-        overviewSvg.select('.brush').call(overviewBrush.move, [x0, x1]);
-    } catch (e) {
-        try { overviewSvg.select('.brush').call(overviewBrush.move, [0, overviewWidth]); } catch(_) {}
-    } finally {
-        isUpdatingFromZoom = false;
-    }
-
-    // Add custom brush handles
-    const lineY = overviewHeight - 1;
-    const custom = overviewSvg.append('g').attr('class', 'overview-custom');
-    custom.append('line').attr('class', 'overview-window-line').attr('x1', 0).attr('x2', overviewWidth).attr('y1', lineY).attr('y2', lineY);
-    custom.append('circle').attr('class', 'overview-handle left').attr('r', 6).attr('cx', 0).attr('cy', lineY);
-    custom.append('circle').attr('class', 'overview-handle right').attr('r', 6).attr('cx', overviewWidth).attr('cy', lineY);
-    custom.append('rect').attr('class', 'overview-window-grab').attr('x', 0).attr('y', lineY - 8).attr('width', overviewWidth).attr('height', 16);
-
-    const getSel = () => d3.brushSelection(overviewSvg.select('.brush').node()) || [0, overviewWidth];
-    const moveBrushTo = (x0, x1) => {
-        x0 = Math.max(0, Math.min(overviewWidth, x0));
-        x1 = Math.max(0, Math.min(overviewWidth, x1));
-        if (x1 <= x0) x1 = Math.min(overviewWidth, x0 + 1);
-        overviewSvg.select('.brush').call(overviewBrush.move, [x0, x1]);
-    };
-    const updateCustomFromSel = () => {
-        const [x0, x1] = getSel();
-        custom.select('.overview-window-line').attr('x1', x0).attr('x2', x1);
-        custom.select('.overview-handle.left').attr('cx', x0);
-        custom.select('.overview-handle.right').attr('cx', x1);
-        custom.select('.overview-window-grab').attr('x', x0).attr('width', Math.max(1, x1 - x0));
-    };
-    updateCustomFromSel();
-
-    custom.select('.overview-handle.left').call(d3.drag().on('drag', (event) => {
-        const [, x1] = getSel(); moveBrushTo(event.x, x1); updateCustomFromSel();
-    }));
-    custom.select('.overview-handle.right').call(d3.drag().on('drag', (event) => {
-        const [x0] = getSel(); moveBrushTo(x0, event.x); updateCustomFromSel();
-    }));
-    custom.select('.overview-window-grab').call(d3.drag().on('drag', (event) => {
-        const [x0, x1] = getSel(); moveBrushTo(x0 + event.dx, x1 + event.dx); updateCustomFromSel();
-    }));
-
-    // Create legend (build synthetic flow counts for legend display)
-    try {
-        let totalGraceful = 0, totalAbortive = 0, totalOpen = 0, totalOngoing = 0;
-        const invalidCounts = {};
-        for (const [, totals] of binTotals) {
-            totalGraceful += totals.graceful;
-            totalAbortive += totals.abortive;
-            totalOpen += totals.open;
-            totalOngoing += totals.ongoing;
-            for (const [reason, count] of Object.entries(totals.invalid)) {
-                invalidCounts[reason] = (invalidCounts[reason] || 0) + count;
-            }
-        }
-
-        // Build synthetic flows for legend counts (minimal structure)
-        const syntheticFlows = [];
-        for (let i = 0; i < totalGraceful; i++) syntheticFlows.push({ closeType: 'graceful' });
-        for (let i = 0; i < totalAbortive; i++) syntheticFlows.push({ closeType: 'abortive' });
-        for (let i = 0; i < totalOpen; i++) syntheticFlows.push({ establishmentComplete: true });
-        for (let i = 0; i < totalOngoing; i++) syntheticFlows.push({ state: 'connecting' });
-        for (const [reason, count] of Object.entries(invalidCounts)) {
-            for (let i = 0; i < count; i++) syntheticFlows.push({ invalidReason: reason });
-        }
-
-        createOverviewFlowLegend({
-            svg: overviewSvg,
-            width: overviewWidth,
-            height: overviewHeight,
-            flowColors: flowColors,
-            flows: syntheticFlows,
-            hiddenInvalidReasons: hiddenInvalidReasonsRef,
-            hiddenCloseTypes: hiddenCloseTypesRef,
-            d3: d3,
-            onToggleReason: () => {},
-            onToggleCloseType: () => {}
-        });
-    } catch (error) {
-        console.warn('Failed to create overview flow legend:', error);
-    }
-
-    try { updateBrushFromZoom(); } catch (_) {}
-}
 
 export function updateBrushFromZoom() {
     if (isUpdatingFromBrush || !overviewBrush || !overviewXScale || !overviewSvg) return;
@@ -1406,7 +996,21 @@ export function createOverviewFromAdaptive(adaptiveData, { timeExtent, width, ma
     const chartHeightUpClosing = chartHeightUp - chartHeightUpOngoing;
     const brushTopY = overviewHeight - 4;
     const invalidAxisGap = 6;
-    const chartHeightDown = Math.max(6, brushTopY - axisY - 4);
+    // Bars start at axisY + invalidAxisGap, so subtract it to prevent overflow into brush handles
+    const chartHeightDown = Math.max(6, brushTopY - axisY - invalidAxisGap - 4);
+    // Shared scale: equal counts produce equal pixel heights across closing and invalid bands
+    const bandHeight = Math.min(chartHeightUpClosing, chartHeightDown);
+
+    // Retain state for dynamic legend-filter recomputation
+    overviewAdaptiveBins = adaptiveData.bins;
+    overviewAdaptiveInvalidReasonOrder = invalidReasons;
+    overviewBinReasonMap = null; // clear flow-based path state
+    overviewStoredAxisY = axisY;
+    overviewStoredBandHeight = bandHeight;
+    overviewStoredChartHeightUpOngoing = chartHeightUpOngoing;
+    overviewStoredInvalidAxisGap = invalidAxisGap;
+    overviewStoredClosingTypes = closingTypes;
+    overviewStoredOngoingTypes = ongoingTypes;
 
     // Determine present reasons for row layout
     const presentReasonsSet = new Set();
@@ -1448,7 +1052,7 @@ export function createOverviewFromAdaptive(adaptiveData, { timeExtent, width, ma
         for (const t of closingTypes) {
             const count = bin.counts[t] || 0;
             if (count === 0) continue;
-            const h = (count / sharedMax) * chartHeightUpClosing;
+            const h = (count / sharedMax) * bandHeight;
             yTop -= h;
             segments.push({
                 kind: 'closing', closeType: t, reason: null,
@@ -1476,7 +1080,7 @@ export function createOverviewFromAdaptive(adaptiveData, { timeExtent, width, ma
         for (const reason of reasons) {
             const count = bin.counts[reason] || 0;
             if (count === 0) continue;
-            const h = (count / sharedMax) * chartHeightDown;
+            const h = (count / sharedMax) * bandHeight;
             segments.push({
                 kind: 'invalid', reason, closeType: null,
                 x: baseX, y: yBottom, width: widthPx, height: h,
@@ -1696,54 +1300,224 @@ export function createOverviewFromAdaptive(adaptiveData, { timeExtent, width, ma
         const [x0, x1] = getSel(); moveBrushTo(x0 + event.dx, x1 + event.dx); updateCustomFromSel();
     }));
 
+    // Create legend — aggregate counts directly from bins, no synthetic flow objects needed
+    try {
+        const legendCounts = { graceful: 0, abortive: 0, open: 0 };
+        for (const reason of invalidReasons) legendCounts[reason] = 0;
+        for (const bin of adaptiveData.bins) {
+            legendCounts.graceful += bin.counts.graceful || 0;
+            legendCounts.abortive += bin.counts.abortive || 0;
+            legendCounts.open += bin.counts.open || 0;
+            for (const reason of invalidReasons) legendCounts[reason] += bin.counts[reason] || 0;
+        }
+        createOverviewFlowLegend({
+            svg: overviewSvg,
+            width: overviewWidth,
+            height: overviewHeight,
+            flowColors: flowColors,
+            counts: legendCounts,
+            hiddenInvalidReasons: hiddenInvalidReasonsRef,
+            hiddenCloseTypes: hiddenCloseTypesRef,
+            d3: d3,
+            onToggleReason: (reason) => {
+                if (overviewHiddenReasons.has(reason)) overviewHiddenReasons.delete(reason);
+                else overviewHiddenReasons.add(reason);
+                recomputeOverviewBars();
+                updateOverviewLegendOpacity();
+            },
+            onToggleCloseType: (closeType) => {
+                if (overviewHiddenCloseTypes.has(closeType)) overviewHiddenCloseTypes.delete(closeType);
+                else overviewHiddenCloseTypes.add(closeType);
+                recomputeOverviewBars();
+                updateOverviewLegendOpacity();
+            }
+        });
+    } catch (error) {
+        console.warn('Failed to create overview flow legend:', error);
+    }
+
     console.log(`[OverviewChart] Rendered ${segments.length} segments from adaptive data`);
+    try { updateOverviewInvalidVisibility(); } catch (_) {}
+}
+
+// Recompute bar heights and y-positions after a legend filter toggle.
+// Considers both the overview-local hidden sets and the main-app filter sets.
+function recomputeOverviewBars() {
+    if (!overviewSvg) return;
+    const isReasonHidden = (r) => overviewHiddenReasons.has(r) || !!(hiddenInvalidReasonsRef && hiddenInvalidReasonsRef.has(r));
+    const isCloseHidden = (t) => overviewHiddenCloseTypes.has(t) || !!(hiddenCloseTypesRef && hiddenCloseTypesRef.has(t));
+    if (overviewAdaptiveBins) _recomputeAdaptive(isReasonHidden, isCloseHidden);
+    else if (overviewBinReasonMap) _recomputeFlows(isReasonHidden, isCloseHidden);
+}
+
+function _recomputeFlows(isReasonHidden, isCloseHidden) {
+    const axisY = overviewStoredAxisY;
+    const bandHeight = overviewStoredBandHeight;
+    const cUpOngoing = overviewStoredChartHeightUpOngoing;
+    const gap = overviewStoredInvalidAxisGap;
+    const reasons = overviewStoredReasons;
+    const closingTypes = overviewStoredClosingTypes;
+
+    // Recompute sharedMax from visible categories only
+    let newMax = 1;
+    for (let i = 0; i < overviewStoredBinCount; i++) {
+        let ct = 0, ot = 0, it = 0;
+        for (const [t, arr] of (overviewBinCloseMap.get(i) || new Map())) { if (!isCloseHidden(t)) ct += arr.length; }
+        for (const [t, arr] of (overviewBinOngoingMap.get(i) || new Map())) { if (!isCloseHidden(t)) ot += arr.length; }
+        for (const [r, arr] of (overviewBinReasonMap.get(i) || new Map())) { if (!isReasonHidden(r)) it += arr.length; }
+        newMax = Math.max(newMax, ct, ot, it);
+    }
+
+    // Restack positions per bin
+    const positions = new Map();
+    for (let i = 0; i < overviewStoredBinCount; i++) {
+        const pos = { closing: new Map(), ongoing: new Map(), invalid: new Map() };
+        let yTop = axisY - cUpOngoing;
+        for (const t of closingTypes) {
+            if (isCloseHidden(t)) continue;
+            const arr = (overviewBinCloseMap.get(i) || new Map()).get(t) || [];
+            if (!arr.length) continue;
+            const h = (arr.length / newMax) * bandHeight;
+            yTop -= h; pos.closing.set(t, { y: yTop, h });
+        }
+        const centerY = axisY - cUpOngoing / 2;
+        for (const t of ['open', 'incomplete']) {
+            if (isCloseHidden(t)) continue;
+            const arr = (overviewBinOngoingMap.get(i) || new Map()).get(t) || [];
+            if (!arr.length) continue;
+            const h = (arr.length / newMax) * (cUpOngoing / 2);
+            pos.ongoing.set(t, { y: t === 'open' ? centerY - h : centerY, h });
+        }
+        let yBot = axisY + gap;
+        for (const r of reasons) {
+            if (isReasonHidden(r)) continue;
+            const arr = (overviewBinReasonMap.get(i) || new Map()).get(r) || [];
+            if (!arr.length) continue;
+            const h = (arr.length / newMax) * bandHeight;
+            pos.invalid.set(r, { y: yBot, h }); yBot += h;
+        }
+        positions.set(i, pos);
+    }
+    _applyPositions(positions, isReasonHidden, isCloseHidden);
+}
+
+function _recomputeAdaptive(isReasonHidden, isCloseHidden) {
+    const bins = overviewAdaptiveBins;
+    const invalidOrder = overviewAdaptiveInvalidReasonOrder;
+    const closingTypes = overviewStoredClosingTypes;
+    const ongoingTypes = overviewStoredOngoingTypes;
+    const axisY = overviewStoredAxisY;
+    const bandHeight = overviewStoredBandHeight;
+    const cUpOngoing = overviewStoredChartHeightUpOngoing;
+    const gap = overviewStoredInvalidAxisGap;
+
+    let newMax = 1;
+    for (const bin of bins) {
+        let ct = 0, ot = 0, it = 0;
+        for (const t of closingTypes) { if (!isCloseHidden(t)) ct += bin.counts[t] || 0; }
+        for (const t of ongoingTypes) { if (!isCloseHidden(t)) ot += bin.counts[t] || 0; }
+        for (const r of invalidOrder) { if (!isReasonHidden(r)) it += bin.counts[r] || 0; }
+        newMax = Math.max(newMax, ct, ot, it);
+    }
+
+    const positions = new Map();
+    for (const bin of bins) {
+        const pos = { closing: new Map(), ongoing: new Map(), invalid: new Map() };
+        let yTop = axisY - cUpOngoing;
+        for (const t of closingTypes) {
+            if (isCloseHidden(t)) continue;
+            const count = bin.counts[t] || 0; if (!count) continue;
+            const h = (count / newMax) * bandHeight;
+            yTop -= h; pos.closing.set(t, { y: yTop, h });
+        }
+        const centerY = axisY - cUpOngoing / 2;
+        for (const t of ongoingTypes) {
+            if (isCloseHidden(t)) continue;
+            const count = bin.counts[t] || 0; if (!count) continue;
+            const h = (count / newMax) * (cUpOngoing / 2);
+            pos.ongoing.set(t, { y: t === 'open' ? centerY - h : centerY, h });
+        }
+        let yBot = axisY + gap;
+        for (const r of invalidOrder) {
+            if (isReasonHidden(r)) continue;
+            const count = bin.counts[r] || 0; if (!count) continue;
+            const h = (count / newMax) * bandHeight;
+            pos.invalid.set(r, { y: yBot, h }); yBot += h;
+        }
+        positions.set(bin.binIndex, pos);
+    }
+    _applyPositions(positions, isReasonHidden, isCloseHidden);
+}
+
+function _applyPositions(binPositions, isReasonHidden, isCloseHidden) {
+    if (!overviewSvg) return;
+    overviewSvg.selectAll('.overview-stack-segment')
+        .each(function(d) {
+            if (!d) return;
+            const sel = d3Ref.select(this);
+            const binPos = binPositions.get(d.binIndex);
+            let hidden = false, newY, newH;
+
+            if (d.kind === 'invalid') {
+                hidden = isReasonHidden(d.reason);
+                if (!hidden && binPos && binPos.invalid.has(d.reason)) {
+                    ({ y: newY, h: newH } = binPos.invalid.get(d.reason));
+                }
+            } else if (d.kind === 'closing') {
+                hidden = isCloseHidden(d.closeType);
+                if (!hidden && binPos && binPos.closing.has(d.closeType)) {
+                    ({ y: newY, h: newH } = binPos.closing.get(d.closeType));
+                }
+            } else if (d.kind === 'ongoing') {
+                hidden = isCloseHidden(d.closeType);
+                if (!hidden && binPos && binPos.ongoing.has(d.closeType)) {
+                    ({ y: newY, h: newH } = binPos.ongoing.get(d.closeType));
+                }
+            }
+
+            sel.style('display', hidden ? 'none' : null);
+            if (!hidden && newY !== undefined) {
+                sel.transition().duration(200)
+                    .attr('y', newY)
+                    .attr('height', Math.max(0.5, newH));
+            }
+        });
+}
+
+function updateOverviewLegendOpacity() {
+    if (!overviewSvg) return;
+    const hiddenReasons = hiddenInvalidReasonsRef;
+    const hiddenCloses = hiddenCloseTypesRef;
+    overviewSvg.selectAll('.overview-flow-legend .legend-item')
+        .style('opacity', function(d) {
+            if (!d) return 1.0;
+            const hidden = d.type === 'invalid'
+                ? (overviewHiddenReasons.has(d.key) || !!(hiddenReasons && hiddenReasons.has(d.key)))
+                : (overviewHiddenCloseTypes.has(d.key) || !!(hiddenCloses && hiddenCloses.has(d.key)));
+            return hidden ? 0.4 : 1.0;
+        });
 }
 
 export function updateOverviewInvalidVisibility() {
     if (!overviewSvg) return;
-    const hiddenReasons = hiddenInvalidReasonsRef;
-    const hiddenCloses = hiddenCloseTypesRef;
-    const noReasonHidden = !hiddenReasons || hiddenReasons.size === 0;
-    const noCloseHidden = !hiddenCloses || hiddenCloses.size === 0;
-    
-    // Update chart segments
-    overviewSvg.selectAll('.overview-stack-segment')
-        .style('display', d => {
-            if (!d) return null;
-            if (d.kind === 'invalid') {
-                return (noReasonHidden || !d.reason || !hiddenReasons.has(d.reason)) ? null : 'none';
-            }
-            if (d.kind === 'closing' || d.kind === 'ongoing') {
-                return (noCloseHidden || !d.closeType || !hiddenCloses.has(d.closeType)) ? null : 'none';
-            }
-            return null;
-        })
-        .style('opacity', d => {
-            if (!d) return null;
-            if (d.kind === 'invalid') {
-                return (noReasonHidden || !d.reason || !hiddenReasons.has(d.reason)) ? null : 0;
-            }
-            if (d.kind === 'closing' || d.kind === 'ongoing') {
-                return (noCloseHidden || !d.closeType || !hiddenCloses.has(d.closeType)) ? null : 0;
-            }
-            return null;
-        });
-    
-    // Update legend to reflect hidden state
-    overviewSvg.selectAll('.overview-flow-legend .legend-item')
-        .style('opacity', function() {
-            const item = d3Ref.select(this);
-            const data = item.datum();
-            if (!data) return 1.0;
-            
-            let hidden = false;
-            if (data.type === 'invalid') {
-                hidden = hiddenReasons && hiddenReasons.has(data.key);
-            } else if (data.type === 'closing' || data.type === 'ongoing') {
-                hidden = hiddenCloses && hiddenCloses.has(data.key);
-            }
-            return hidden ? 0.4 : 1.0;
-        });
+    if (overviewBinReasonMap || overviewAdaptiveBins) {
+        // Full recompute: rescales heights based on visible-only max and restacks positions
+        recomputeOverviewBars();
+    } else {
+        // Fallback CSS-only path (no stored bin data available)
+        const hiddenReasons = hiddenInvalidReasonsRef;
+        const hiddenCloses = hiddenCloseTypesRef;
+        const noReasonHidden = !hiddenReasons || hiddenReasons.size === 0;
+        const noCloseHidden = !hiddenCloses || hiddenCloses.size === 0;
+        overviewSvg.selectAll('.overview-stack-segment')
+            .style('display', d => {
+                if (!d) return null;
+                if (d.kind === 'invalid') return (noReasonHidden || !d.reason || !hiddenReasons.has(d.reason)) ? null : 'none';
+                if (d.kind === 'closing' || d.kind === 'ongoing') return (noCloseHidden || !d.closeType || !hiddenCloses.has(d.closeType)) ? null : 'none';
+                return null;
+            });
+    }
+    updateOverviewLegendOpacity();
 }
 
 /**

@@ -1,0 +1,32 @@
+/* Shared styles used across attack-network.html and tcp-analysis.html */
+
+/* Base button */
+.cp-btn {
+    padding: 4px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid #ced4da;
+    border-radius: 4px;
+    background: #f8f9fa;
+    color: #495057;
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+}
+.cp-btn:hover {
+    background: #e9ecef;
+    border-color: #adb5bd;
+    color: #212529;
+}
+.cp-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+.cp-btn.cp-btn-primary {
+    background: #0d6efd;
+    border-color: #0d6efd;
+    color: #fff;
+}
+.cp-btn.cp-btn-primary:hover {
+    background: #0b5ed7;
+    border-color: #0b5ed7;
+}
