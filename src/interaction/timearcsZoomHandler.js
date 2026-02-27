@@ -120,6 +120,8 @@ export function createTimeArcsZoomHandler(context) {
         isMultiResAvailable,
         getUseMultiRes,
         setCurrentResolutionLevel,
+        drawAutoFlowThreading,
+        clearAutoFlowThreading,
         logCatchError
     } = context;
 
@@ -490,6 +492,14 @@ export function createTimeArcsZoomHandler(context) {
             // correct positions from freshly rendered DOM circles.
             if (drawSubRowArcs) {
                 try { drawSubRowArcs(); } catch (e) { logCatchError('drawSubRowArcs-postRender', e); }
+            }
+
+            // Auto flow threading: draw sequential arcs at raw resolution,
+            // clear them at any coarser resolution.
+            if (resolvedResolution === 'raw' && drawAutoFlowThreading && state.ui.showFlowThreading) {
+                try { drawAutoFlowThreading(binnedPackets); } catch (e) { logCatchError('drawAutoFlowThreading', e); }
+            } else if (clearAutoFlowThreading) {
+                try { clearAutoFlowThreading(); } catch (e) { logCatchError('clearAutoFlowThreading', e); }
             }
         }, 50); // Debounce delay
     };

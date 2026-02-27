@@ -652,7 +652,6 @@ export class TimearcsLayout {
     // Phase 1: Force simulation for IP vertical ordering
     // ─────────────────────────────────────────────────────────────
     const canReuseCachedLayout = isRenderingFilteredData && this._cachedLayoutResult;
-    setStatus(this._statusEl, 'Stabilizing network layout...');
     const centerX = (MARGIN.left + width - MARGIN.right) / 2;
 
     if (!canReuseCachedLayout) {
@@ -739,7 +738,7 @@ export class TimearcsLayout {
     // ─────────────────────────────────────────────────────────────
     // Phase 2: Compute final Y positions
     // ─────────────────────────────────────────────────────────────
-    setStatus(this._statusEl, 'Animating to timeline...');
+    setStatus(this._statusEl, `${allIps.length} IPs • ${attacks.length} attacks • ${linksWithNodes.length} links`);
     const currentIpSet = new Set(allIps);
     const sortedIps = this._cachedLayoutResult.sortedIps.filter(ip => currentIpSet.has(ip));
     this._currentSortedIps = sortedIps.slice();
@@ -977,7 +976,7 @@ export class TimearcsLayout {
               this._brushGroup.call(this._brush);
             }
 
-            setStatus(this._statusEl, `${data.length} records • ${sortedIps.length} IPs • ${attacks.length} ${labelMode === 'force_layout' ? 'attack groups' : 'attack types'}`);
+            setStatus(this._statusEl, `${allIps.length} IPs • ${attacks.length} attacks • ${linksWithNodes.length} links`);
 
             if (this._persistentSelections.length > 0) this._redrawAllPersistentSelections();
 
