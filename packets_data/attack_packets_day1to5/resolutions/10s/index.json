@@ -1,0 +1,10 @@
+{
+  "resolution": "10s",
+  "resolution_microseconds": 10000000,
+  "total_count": 280161,
+  "time_range": {
+    "start": 1257254650000000,
+    "end": 1257654110000000
+  },
+  "data_file": "data.csv"
+}
