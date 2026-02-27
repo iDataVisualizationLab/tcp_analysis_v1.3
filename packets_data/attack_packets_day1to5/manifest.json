@@ -1,8 +1,8 @@
 {
   "version": "3.3",
   "format": "multires_packets",
-  "created": "2026-01-22T21:48:29.660378",
-  "source_file": "packets_data/attack_packets_first5days.csv",
+  "created": "2026-02-18T23:04:27.224404",
+  "source_file": "attack_packets_first5days.csv",
   "total_packets": 24469142,
   "unique_ips": 294,
   "time_range": {
@@ -22,6 +22,12 @@
       "total_bins": 80762,
       "index": "resolutions/minutes/index.json",
       "data": "resolutions/minutes/data.csv"
+    },
+    "10s": {
+      "resolution_microseconds": 10000000,
+      "total_bins": 280161,
+      "index": "resolutions/10s/index.json",
+      "data": "resolutions/10s/data.csv"
     },
     "seconds": {
       "resolution_microseconds": 1000000,

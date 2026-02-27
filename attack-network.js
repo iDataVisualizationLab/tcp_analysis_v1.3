@@ -384,7 +384,6 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
       rawColorByAttackGroup = mappings.rawColorByAttackGroup;
 
       if (ipMapLoaded) {
-        setStatus(statusEl, `IP map loaded (${ipIdToAddr.size} entries). Upload CSV to render.`);
       }
     } catch (err) {
       console.warn('Mapping load failed:', err);
@@ -581,7 +580,6 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
       // Warn if IP map is not loaded
       if (!ipMapLoaded || !ipIdToAddr || ipIdToAddr.size === 0) {
         console.warn('IP map not loaded or empty. Some IP IDs may not be mapped correctly.');
-        setStatus(statusEl,'Warning: IP map not loaded. Some data may be filtered out.');
       }
 
       // Reset loaded file info
@@ -674,11 +672,6 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
       hideProgress();
 
       if (combinedData.length === 0) {
-        if (errors.length > 0) {
-          setStatus(statusEl,`Failed to load files. ${errors.length} error(s) occurred.`);
-        } else {
-          setStatus(statusEl,'No valid rows found. Ensure CSV files have required columns and IP mappings are available.');
-        }
         clearChart();
         return;
       }
@@ -709,14 +702,11 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
         }
       }
       
-      setStatus(statusEl,statusMsg);
-
       // Render new data (cleanup already done at the start of this handler)
       render(combinedData);
     } catch (err) {
       console.error(err);
       hideProgress();
-      setStatus(statusEl,'Failed to read CSV file(s).');
       clearChart();
     }
   });
@@ -781,7 +771,6 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
       });
 
       if (!data.length) {
-        setStatus(statusEl,'Default CSV loaded but no valid rows found. Check IP mappings.');
         return;
       }
       
@@ -814,12 +803,6 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
       // Report how many rows were filtered out
       const totalRows = rows.length;
       const filteredRows = totalRows - data.length;
-      if (filteredRows > 0) {
-        setStatus(statusEl,`Loaded default: set1_first90_minutes.csv (${data.length} valid rows, ${filteredRows} filtered due to missing IP mappings)`);
-      } else {
-        setStatus(statusEl,`Loaded default: set1_first90_minutes.csv (${data.length} rows)`);
-      }
-      
       render(data);
     } catch (err) {
       // ignore if file isn't present; keep waiting for upload
@@ -951,7 +934,6 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
     }
 
     layoutTransitionInProgress = true;
-    setStatus(statusEl, 'Computing force layout...');
 
     const activeLabelKey = 'attack_group';
 
@@ -983,8 +965,6 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
     // rawPositions: pass to render() so autoFit reproduces the same visual layout
     // visualPositions: where nodes will appear on screen (arc merge targets)
     const { rawPositions, visualPositions } = forceLayout.precalculate(initialPositions);
-
-    setStatus(statusEl, 'Animating to force layout...');
 
     // --- Phase 1: Animate arcs to precalculated force node positions ---
 
@@ -1049,7 +1029,7 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
     if (compressionSlider) compressionSlider.closest('div').style.display = 'none';
 
     layoutTransitionInProgress = false;
-    setStatus(statusEl, `Force layout: ${ctx.allIps.length} IPs • ${attacks.length} attack groups`);
+    setStatus(statusEl, `${ctx.allIps.length} IPs • ${attacks.length} attacks • ${ctx.linksWithNodes.length} links`);
   }
 
   // Show force layout directly without animation (used on initial load when force layout is default)
@@ -1110,12 +1090,11 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
     // Hide compression slider
     if (compressionSlider) compressionSlider.closest('div').style.display = 'none';
 
-    setStatus(statusEl, `Force layout: ${ctx.allIps.length} IPs • ${attacks.length} attack groups`);
+    setStatus(statusEl, `${ctx.allIps.length} IPs • ${attacks.length} attacks • ${ctx.linksWithNodes.length} links`);
   }
 
   async function transitionToTimearcs() {
     layoutTransitionInProgress = true;
-    setStatus(statusEl, 'Animating to TimeArcs...');
 
     // --- Phase 1: Position arcs at force node positions ---
 
@@ -1236,7 +1215,9 @@ import { TimearcsLayout } from './src/layout/timearcs_layout.js';
     }
 
     layoutTransitionInProgress = false;
-    setStatus(statusEl, 'TimeArcs view restored');
+    const taCtx = timearcsLayout ? timearcsLayout.getContext() : {};
+    const taAttacks = (timearcsLayout && timearcsLayout._attacks) ? timearcsLayout._attacks : [];
+    setStatus(statusEl, `${taCtx.allIps ? taCtx.allIps.length : 0} IPs • ${taAttacks.length} attacks • ${taCtx.linksWithNodes ? taCtx.linksWithNodes.length : 0} links`);
   }
 
   function buildLegend(items, colorFn) {
