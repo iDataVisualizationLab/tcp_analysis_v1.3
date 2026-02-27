@@ -1,6 +1,6 @@
 // src/data/csv-resolution-manager.js - CSV-based Multi-Resolution Data Manager
 // Manages zoom-level dependent data loading from CSV resolution files
-// Supports: hours, minutes, seconds, 100ms, 10ms, 1ms bins, raw (microsecond packets)
+// Supports: hours, minutes, 10s, seconds, 100ms, 10ms, 1ms bins, raw (microsecond packets)
 
 /**
  * LRU Cache for storing loaded chunks
@@ -49,6 +49,7 @@ class LRUCache {
  * Thresholds:
  * - hours: > 2 days visible
  * - minutes: > 1 hour visible
+ * - 10s: > 10 minutes visible
  * - seconds: > 1 minute visible
  * - 100ms: > 10 seconds visible
  * - 10ms: > 1 second visible
@@ -72,6 +73,15 @@ const RESOLUTION_CONFIG = [
         binSize: 60_000_000,             // 1 minute in microseconds
         preBinned: true,
         isSingleFile: true,              // minutes uses a single data.csv
+        cacheSize: 0                     // no cache needed, loaded once
+    },
+    {
+        name: '10s',
+        dirName: '10s',
+        threshold: 10 * 60 * 1_000_000,  // > 10 minutes visible: use 10s
+        binSize: 10_000_000,             // 10 seconds in microseconds
+        preBinned: true,
+        isSingleFile: true,              // 10s uses a single data.csv
         cacheSize: 0                     // no cache needed, loaded once
     },
     {
@@ -187,7 +197,7 @@ export class CSVResolutionManager {
 
             // Return seconds-level data as default (better for most initial views)
             // If seconds not available, fall back to coarser resolutions
-            const preferredOrder = ['seconds', 'minutes', 'hours'];
+            const preferredOrder = ['seconds', '10s', 'minutes', 'hours'];
             let initialData = [];
             let initialRes = 'seconds';
             for (const resName of preferredOrder) {

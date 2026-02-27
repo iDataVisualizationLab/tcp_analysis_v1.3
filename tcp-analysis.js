@@ -251,7 +251,8 @@ const state = {
         useBinning: true,        // User toggle: binning on/off
         renderMode: 'circles',   // Render mode (circles only)
         separateFlags: false,    // Spread overlapping flag circles vertically
-        showSubRowArcs: false    // Show permanent ghost arcs for IP pair sub-rows
+        showSubRowArcs: false,   // Show permanent ghost arcs for IP pair sub-rows
+        showFlowThreading: true  // Auto-draw flow threading arcs at raw resolution
     },
 
     // Phase 3: TimeArcs Integration (isolated, ~50 refs)
@@ -551,6 +552,60 @@ function getIPYWithSubRowOffset(ip, srcIp, dstIp) {
 }
 
 /**
+ * Build a position lookup from rendered DOM circles.
+ * This accounts for both sub-row offsets AND flag separation — the single
+ * source of truth for where circles actually appear on screen.
+ * Returns { exact: Map, byRow: Map } where:
+ *   exact: `${time}|${src_ip}|${dst_ip}|${flagType}` → yPosWithOffset
+ *   byRow:  `${time}|${src_ip}|${flagType}` → yPosWithOffset (fallback for collapsed rows)
+ */
+function buildCirclePositionMap() {
+    const exact = new Map();
+    const byRow = new Map();
+    const activeLayer = (dynamicLayer && dynamicLayer.style('display') !== 'none' && !dynamicLayer.selectAll('.direction-dot').empty())
+        ? dynamicLayer
+        : fullDomainLayer;
+    if (!activeLayer) return { exact, byRow };
+
+    activeLayer.selectAll('.direction-dot').each(function () {
+        const d = d3.select(this).datum();
+        if (!d || !d.src_ip) return;
+        const time = Math.floor(d.binCenter ?? d.timestamp ?? 0);
+        const flagType = d.flagType || d.flag_type || getFlagType(d);
+        const yPos = d.yPosWithOffset;
+        if (yPos == null) return;
+
+        // For collapsed circles, register every merged IP pair
+        const pairs = (d.ipPairKey === '__collapsed__' && Array.isArray(d.ipPairs))
+            ? d.ipPairs
+            : [{ src_ip: d.src_ip, dst_ip: d.dst_ip }];
+
+        for (const p of pairs) {
+            if (p.dst_ip) {
+                exact.set(`${time}|${d.src_ip}|${p.dst_ip}|${flagType}`, yPos);
+            }
+        }
+
+        // Row-level fallback (first circle wins — all collapsed circles share yPos)
+        const rowKey = `${time}|${d.src_ip}|${flagType}`;
+        if (!byRow.has(rowKey)) byRow.set(rowKey, yPos);
+    });
+
+    return { exact, byRow };
+}
+
+/**
+ * Look up the actual rendered y-position for a packet using the circle position map.
+ * Falls back to getIPYWithSubRowOffset() when no matching circle is in the DOM.
+ */
+function lookupCircleY(circlePosMap, time, srcIp, dstIp, flagType) {
+    const t = Math.floor(time);
+    return circlePosMap.exact.get(`${t}|${srcIp}|${dstIp}|${flagType}`)
+        ?? circlePosMap.byRow.get(`${t}|${srcIp}|${flagType}`)
+        ?? getIPYWithSubRowOffset(srcIp, srcIp, dstIp);
+}
+
+/**
  * Sync sub-row-highlight rect positions with current state.layout.
  * Called after any position recalculation (collapse adjustment, drag reorder).
  */
@@ -832,6 +887,16 @@ function initializeBarVisualization() {
                 drawSelectedFlowArcs();
                 applyInvalidReasonFilter();
             } catch(e) { logCatchError('toggleSeparateFlags', e); }
+        },
+        onToggleFlowThreading: (checked) => {
+            state.ui.showFlowThreading = checked;
+            if (!checked) {
+                clearAutoFlowThreading();
+            } else if (currentResolutionLevel === 'raw' && xScale) {
+                // Turning on while already at raw resolution — draw immediately
+                const visible = getVisiblePackets(state.data.filtered, xScale);
+                drawAutoFlowThreading(visible);
+            }
         },
         onToggleBinning: (checked) => {
             state.ui.useBinning = checked; 
@@ -1730,12 +1795,18 @@ function drawSelectedFlowArcs() {
         .range([MIN_THICKNESS, MAX_THICKNESS])
         .clamp(true);
 
+    // Read actual circle positions from the DOM so arcs respect sub-row
+    // expansion AND flag separation (mirrors drawSubRowArcs approach).
+    const circlePosMap = buildCirclePositionMap();
+
     groups.forEach(g => {
         const ftype = getFlagType(g);
         if (!isFlagVisibleByPhase(ftype, { showEstablishment: state.ui.showEstablishment, showDataTransfer: state.ui.showDataTransfer, showClosing: state.ui.showClosing })) return;
 
         const pathPacket = g.rep;
-        const srcY = getIPYWithSubRowOffset(pathPacket.src_ip, pathPacket.src_ip, pathPacket.dst_ip);
+        // srcY: actual circle position (accounts for flag separation + sub-row offset)
+        const srcY = lookupCircleY(circlePosMap, g.timestamp, pathPacket.src_ip, pathPacket.dst_ip, ftype);
+        // dstY: destination row sub-row center (no circle there for this specific arc)
         const dstY = getIPYWithSubRowOffset(pathPacket.dst_ip, pathPacket.src_ip, pathPacket.dst_ip);
         const path = arcPathGenerator(pathPacket, { xScale, ipPositions: state.layout.ipPositions, pairs: state.layout.pairs, findIPPosition, flagCurvature: FLAG_CURVATURE, srcY, dstY });
         if (path && pathPacket.src_ip !== pathPacket.dst_ip) {
@@ -2812,6 +2883,7 @@ async function refreshAdaptiveOverview(selectedIPs, timeExtent = null) {
     const MAIN_TO_OVERVIEW_RESOLUTION = {
         'hours': 'hour',
         'minutes': '1min',
+        '10s': '1min',
         'seconds': '1s',
         '100ms': '1s',
         '10ms': '1s',
@@ -3624,6 +3696,8 @@ function renderFlowDetailView(flow, packets) {
     if (dynamicLayer) dynamicLayer.selectAll('*').remove();
     mainGroup.selectAll('.flow-arc').remove();
     mainGroup.selectAll('.flow-detail-arc').remove();
+    mainGroup.selectAll('.flow-threading-arc').remove();
+    mainGroup.selectAll('.flow-threading-arcs').remove();
 
     // Ensure IPs are in state.layout.ipPositions
     flowIPs.forEach(ip => {
@@ -3751,6 +3825,196 @@ function drawFlowDetailArcs(flow, packets) {
             .attr('fill', color)
             .attr('fill-opacity', 0.8);
     }
+}
+
+/**
+ * Auto-draw flow threading arcs for all visible raw packets.
+ * Groups packets by connection 4-tuple and draws sequential connection
+ * lines (identical to drawFlowDetailArcs style) for each flow.
+ * Also draws dashed continuation lines to viewport edges when a flow
+ * extends beyond the visible time range.
+ *
+ * Called automatically by the zoom handler when resolution is 'raw'.
+ *
+ * @param {Array} packets - Rendered raw packets (yPosWithOffset set by circles.js)
+ */
+function drawAutoFlowThreading(packets) {
+    if (!mainGroup || !xScale) return;
+
+    // Clear previous threading arcs
+    mainGroup.selectAll('.flow-threading-arc').remove();
+    mainGroup.selectAll('.flow-threading-arcs').remove();
+
+    if (!packets || packets.length < 2) return;
+
+    // Group packets by connection key (4-tuple: src_ip, src_port, dst_ip, dst_port)
+    const flowGroups = new Map();
+    for (const p of packets) {
+        if (!p || !p.src_ip || !p.dst_ip) continue;
+        const key = makeConnectionKey(p.src_ip, p.src_port || 0, p.dst_ip, p.dst_port || 0);
+        if (!key) continue;
+        let group = flowGroups.get(key);
+        if (!group) {
+            group = [];
+            flowGroups.set(key, group);
+        }
+        group.push(p);
+    }
+
+    // Sort each group by timestamp; drop groups with < 2 packets
+    for (const [key, group] of flowGroups) {
+        if (group.length < 2) {
+            flowGroups.delete(key);
+            continue;
+        }
+        group.sort((a, b) => (a.timestamp || a.binCenter || 0) - (b.timestamp || b.binCenter || 0));
+    }
+
+    if (flowGroups.size === 0) return;
+
+    // Build lookup from connection key → flow metadata for edge continuation
+    const flowMetaByKey = new Map();
+    if (Array.isArray(state.flows.tcp)) {
+        for (const f of state.flows.tcp) {
+            if (!f) continue;
+            const fkey = f.key || makeConnectionKey(f.initiator, f.initiatorPort, f.responder, f.responderPort);
+            if (fkey && flowGroups.has(fkey)) {
+                flowMetaByKey.set(fkey, f);
+            }
+        }
+    }
+
+    // Viewport time bounds
+    const [viewStart, viewEnd] = xScale.domain();
+    const xLeft = xScale(viewStart);
+    const xRight = xScale(viewEnd);
+
+    // Read actual circle positions from the DOM so threading arcs respect
+    // sub-row expansion AND flag separation.
+    const circlePosMap = buildCirclePositionMap();
+
+    // Create line group (clipped to chart area)
+    const lineGroup = mainGroup.append('g')
+        .attr('class', 'flow-threading-arcs')
+        .attr('clip-path', 'url(#clip)');
+
+    // Arrow dimensions (same as drawFlowDetailArcs)
+    const arrowLen = 5;
+    const arrowHalfW = 3;
+
+    // Draw sequential arcs within each flow group
+    for (const [key, group] of flowGroups) {
+        // -- Sequential packet-to-packet arcs --
+        for (let i = 0; i < group.length - 1; i++) {
+            const p1 = group[i];
+            const p2 = group[i + 1];
+            if (!p1 || !p2) continue;
+
+            const x1 = xScale(p1.timestamp || p1.binCenter);
+            const x2 = xScale(p2.timestamp || p2.binCenter);
+            // Use actual circle positions (accounts for flag separation + sub-row offset)
+            const flagType1 = p1.flagType || p1.flag_type || getFlagType(p1);
+            const flagType2 = p2.flagType || p2.flag_type || getFlagType(p2);
+            const y1 = lookupCircleY(circlePosMap, p1.timestamp || p1.binCenter || 0, p1.src_ip, p1.dst_ip, flagType1);
+            const y2 = lookupCircleY(circlePosMap, p2.timestamp || p2.binCenter || 0, p2.src_ip, p2.dst_ip, flagType2);
+
+            // Color by flag type of the source packet
+            const flagType = flagType1;
+            const color = flagColors[flagType] || flagColors['OTHER'] || '#999';
+
+            const sameIP = p1.src_ip === p2.src_ip;
+            let midPtX, midPtY, angle;
+
+            if (sameIP) {
+                // Straight line for consecutive same-direction packets
+                lineGroup.append('line')
+                    .attr('class', 'flow-threading-arc')
+                    .attr('x1', x1).attr('y1', y1)
+                    .attr('x2', x2).attr('y2', y2)
+                    .attr('stroke', color)
+                    .attr('stroke-width', 1.5)
+                    .attr('stroke-opacity', 0.6);
+
+                midPtX = (x1 + x2) / 2;
+                midPtY = (y1 + y2) / 2;
+                angle = Math.atan2(y2 - y1, x2 - x1);
+            } else {
+                // S-curve for direction changes (request <-> response)
+                const midX = (x1 + x2) / 2;
+                lineGroup.append('path')
+                    .attr('class', 'flow-threading-arc')
+                    .attr('d', `M${x1},${y1} C${midX},${y1} ${midX},${y2} ${x2},${y2}`)
+                    .attr('fill', 'none')
+                    .attr('stroke', color)
+                    .attr('stroke-width', 1.5)
+                    .attr('stroke-opacity', 0.6);
+
+                midPtX = midX;
+                midPtY = (y1 + y2) / 2;
+                angle = Math.atan2(2 * (y2 - y1), x2 - x1);
+            }
+
+            // Midpoint arrowhead triangle
+            const cos = Math.cos(angle);
+            const sin = Math.sin(angle);
+            const tipX = midPtX + arrowLen * cos;
+            const tipY = midPtY + arrowLen * sin;
+            const bx1 = midPtX - arrowLen * cos + arrowHalfW * sin;
+            const by1 = midPtY - arrowLen * sin - arrowHalfW * cos;
+            const bx2 = midPtX - arrowLen * cos - arrowHalfW * sin;
+            const by2 = midPtY - arrowLen * sin + arrowHalfW * cos;
+
+            lineGroup.append('polygon')
+                .attr('class', 'flow-threading-arc')
+                .attr('points', `${tipX},${tipY} ${bx1},${by1} ${bx2},${by2}`)
+                .attr('fill', color)
+                .attr('fill-opacity', 0.8);
+        }
+
+        // -- Edge continuation lines (dashed) --
+        const flowMeta = flowMetaByKey.get(key);
+        if (!flowMeta) continue;
+
+        const firstPkt = group[0];
+        const lastPkt = group[group.length - 1];
+
+        // Left continuation: flow started before viewport
+        if (flowMeta.startTime != null && flowMeta.startTime < viewStart) {
+            const pktX = xScale(firstPkt.timestamp || firstPkt.binCenter);
+            const ft = firstPkt.flagType || firstPkt.flag_type || getFlagType(firstPkt);
+            const pktY = lookupCircleY(circlePosMap, firstPkt.timestamp || firstPkt.binCenter || 0, firstPkt.src_ip, firstPkt.dst_ip, ft);
+            lineGroup.append('line')
+                .attr('class', 'flow-threading-arc')
+                .attr('x1', xLeft).attr('y1', pktY)
+                .attr('x2', pktX).attr('y2', pktY)
+                .attr('stroke', '#888')
+                .attr('stroke-width', 1.2)
+                .attr('stroke-opacity', 0.4)
+                .attr('stroke-dasharray', '4,3');
+        }
+
+        // Right continuation: flow ends after viewport
+        if (flowMeta.endTime != null && flowMeta.endTime > viewEnd) {
+            const pktX = xScale(lastPkt.timestamp || lastPkt.binCenter);
+            const ft = lastPkt.flagType || lastPkt.flag_type || getFlagType(lastPkt);
+            const pktY = lookupCircleY(circlePosMap, lastPkt.timestamp || lastPkt.binCenter || 0, lastPkt.src_ip, lastPkt.dst_ip, ft);
+            lineGroup.append('line')
+                .attr('class', 'flow-threading-arc')
+                .attr('x1', pktX).attr('y1', pktY)
+                .attr('x2', xRight).attr('y2', pktY)
+                .attr('stroke', '#888')
+                .attr('stroke-width', 1.2)
+                .attr('stroke-opacity', 0.4)
+                .attr('stroke-dasharray', '4,3');
+        }
+    }
+}
+
+/** Clear flow threading arcs (called when leaving raw resolution). */
+function clearAutoFlowThreading() {
+    if (!mainGroup) return;
+    mainGroup.selectAll('.flow-threading-arc').remove();
+    mainGroup.selectAll('.flow-threading-arcs').remove();
 }
 
 /**
@@ -4098,6 +4362,8 @@ function visualizeTimeArcs(packets) {
         isMultiResAvailable: () => isMultiResAvailable?.(),
         getUseMultiRes: () => useMultiRes,
         setCurrentResolutionLevel: (level) => { currentResolutionLevel = level; },
+        drawAutoFlowThreading,
+        clearAutoFlowThreading,
         logCatchError
     });
 
@@ -4955,6 +5221,7 @@ const DEFAULT_FLOW_DATA_PATH = 'packets_data/attack_flows_day1to5';
  * Thresholds:
  * - hours: > 2 days visible
  * - minutes: > 1 hour visible
+ * - 10s: > 10 minutes visible
  * - seconds: > 1 minute visible
  * - 100ms: > 10 seconds visible
  * - 10ms: > 1 second visible
@@ -4981,6 +5248,16 @@ const FETCH_RES_CONFIG = [
         isSingleFile: true,
         cacheSize: 0,
         uiInfo: { label: 'Minutes', icon: '🕑', color: '#17a2b8' }
+    },
+    {
+        name: '10s',
+        dirName: '10s',
+        threshold: 10 * 60 * 1_000_000,  // > 10 minutes visible: use 10s
+        binSize: 10_000_000,             // 10 seconds in microseconds
+        preBinned: true,
+        isSingleFile: true,
+        cacheSize: 0,
+        uiInfo: { label: '10 Seconds', icon: '⏱', color: '#20c997' }
     },
     {
         name: 'seconds',
@@ -5121,8 +5398,8 @@ async function initFetchResolutionManager(basePath) {
  */
 const OVERVIEW_TO_PACKET_RESOLUTION = {
     '1s': 'seconds',
-    '1min': 'minutes',
-    '10min': 'minutes',  // No 10min in packets, use minutes
+    '1min': '10s',
+    '10min': 'minutes',
     'hour': 'hours'
 };
 
@@ -5168,29 +5445,37 @@ function getResolutionForVisibleRange(visibleRangeUs) {
         }
     }
 
-    // If a manual override is set, use it as the selected resolution.
-    // Walk from the override toward finer levels one step at a time:
-    // stay at a level while the visible range is above the next finer
-    // level's threshold, ensuring smooth minutes→seconds→100ms→… progression.
+    // If a manual override is set, walk from the selected level toward finer
+    // resolutions.  The selected level is "sticky" — it holds until the zoom
+    // crosses the *next* finer level's threshold, then steps down one level
+    // at a time.  This means selecting "Minutes+" shows minutes immediately
+    // and only refines to seconds when the visible range drops below the
+    // seconds threshold (1 min), not the minutes threshold (1 hour).
+    //
+    // Special case: raw's threshold is 0 (always matches ≥ 0), which would
+    // trap the walk at 1ms forever.  We substitute the current level's own
+    // threshold so the 1ms→raw transition matches auto mode.
     if (manualResolutionOverride && FETCH_RES_BY_NAME[manualResolutionOverride]) {
-        const ceilingIdx = FETCH_RES_CONFIG.findIndex(r => r.name === manualResolutionOverride);
+        const startIdx = FETCH_RES_CONFIG.findIndex(r => r.name === manualResolutionOverride);
 
-        for (let i = ceilingIdx; i < FETCH_RES_CONFIG.length; i++) {
-            const nextIdx = i + 1;
-            if (nextIdx >= FETCH_RES_CONFIG.length ||
-                FETCH_RES_CONFIG[nextIdx].name === 'binned') {
-                // Reached the finest real level
-                console.log(`[Resolution] Manual walk → ${FETCH_RES_CONFIG[i].name} (finest)`);
-                return FETCH_RES_CONFIG[i].name;
-            }
-            if (visibleRangeUs >= FETCH_RES_CONFIG[nextIdx].threshold) {
-                // Visible range is above next level's threshold — use this level
-                console.log(`[Resolution] Manual walk → ${FETCH_RES_CONFIG[i].name} (visible ${(visibleRangeUs/1_000_000).toFixed(2)}s >= ${FETCH_RES_CONFIG[nextIdx].name} threshold ${(FETCH_RES_CONFIG[nextIdx].threshold/1_000_000).toFixed(2)}s)`);
-                return FETCH_RES_CONFIG[i].name;
-            }
+        let currentIdx = startIdx;
+        while (currentIdx < FETCH_RES_CONFIG.length - 1) {
+            const nextLevel = FETCH_RES_CONFIG[currentIdx + 1];
+            if (nextLevel.name === 'binned') break;
+
+            // For raw (threshold 0), use current level's threshold so
+            // 1ms→raw fires at the same point auto mode would transition
+            const checkThreshold = nextLevel.threshold === 0
+                ? FETCH_RES_CONFIG[currentIdx].threshold
+                : nextLevel.threshold;
+
+            if (visibleRangeUs >= checkThreshold) break; // not zoomed in enough
+            currentIdx++;
         }
-        // Fallback (shouldn't reach here)
-        return manualResolutionOverride;
+
+        const result = FETCH_RES_CONFIG[currentIdx].name;
+        console.log(`[Resolution] Manual override ${manualResolutionOverride} → ${result} (walk from ${manualResolutionOverride})`);
+        return result;
     }
 
     console.log(`[Resolution] Threshold: ${(visibleRangeUs/1_000_000).toFixed(2)}s → ${autoResolution}`);
@@ -5514,11 +5799,12 @@ async function loadFromPath(basePath = DEFAULT_DATA_PATH) {
         const hoursPackets = parseSecondsCSV(hoursCsvText, 'hours');
         console.log(`[loadFromPath] Parsed ${hoursPackets.length} hour-level bins`);
 
-        // Also preload minutes and seconds data (all single-file resolutions)
+        // Also preload minutes, 10s, and seconds data (all single-file resolutions)
         let minutesPackets = [];
+        let tenSecPackets = [];
         let secondsPackets = [];
 
-        try { sbUpdateCsvProgress(0.45, 'Loading minutes data...'); } catch(e) { logCatchError('sbUpdateCsvProgress', e); }
+        try { sbUpdateCsvProgress(0.40, 'Loading minutes data...'); } catch(e) { logCatchError('sbUpdateCsvProgress', e); }
 
         try {
             const minutesIndexResponse = await fetch(`${basePath}/resolutions/minutes/index.json`);
@@ -5534,6 +5820,24 @@ async function loadFromPath(basePath = DEFAULT_DATA_PATH) {
             }
         } catch (e) {
             console.warn('[loadFromPath] Could not preload minutes data:', e);
+        }
+
+        try { sbUpdateCsvProgress(0.48, 'Loading 10s data...'); } catch(e) { logCatchError('sbUpdateCsvProgress', e); }
+
+        try {
+            const tenSecIndexResponse = await fetch(`${basePath}/resolutions/10s/index.json`);
+            if (tenSecIndexResponse.ok) {
+                const tenSecIndex = await tenSecIndexResponse.json();
+                const tenSecDataFile = tenSecIndex.data_file || 'data.csv';
+                const tenSecDataResponse = await fetch(`${basePath}/resolutions/10s/${tenSecDataFile}`);
+                if (tenSecDataResponse.ok) {
+                    const tenSecCsvText = await tenSecDataResponse.text();
+                    tenSecPackets = parseSecondsCSV(tenSecCsvText, '10s');
+                    console.log(`[loadFromPath] Preloaded ${tenSecPackets.length} 10-second-level bins`);
+                }
+            }
+        } catch (e) {
+            console.warn('[loadFromPath] Could not preload 10s data:', e);
         }
 
         try { sbUpdateCsvProgress(0.55, 'Loading seconds data...'); } catch(e) { logCatchError('sbUpdateCsvProgress', e); }
@@ -5555,12 +5859,15 @@ async function loadFromPath(basePath = DEFAULT_DATA_PATH) {
         }
 
         // Use finest available single-file resolution for initial data
-        // Prefer seconds > minutes > hours for better compatibility with typical user selections
+        // Prefer seconds > 10s > minutes > hours for better compatibility with typical user selections
         let packets;
         let initialResolution;
         if (secondsPackets.length > 0) {
             packets = secondsPackets;
             initialResolution = 'seconds';
+        } else if (tenSecPackets.length > 0) {
+            packets = tenSecPackets;
+            initialResolution = '10s';
         } else if (minutesPackets.length > 0) {
             packets = minutesPackets;
             initialResolution = 'minutes';
@@ -5621,6 +5928,9 @@ async function loadFromPath(basePath = DEFAULT_DATA_PATH) {
         if (minutesPackets.length > 0) {
             fetchResManager.singleFileData.set('minutes', minutesPackets);
         }
+        if (tenSecPackets.length > 0) {
+            fetchResManager.singleFileData.set('10s', tenSecPackets);
+        }
         if (secondsPackets.length > 0) {
             fetchResManager.singleFileData.set('seconds', secondsPackets);
         }
@@ -5635,7 +5945,7 @@ async function loadFromPath(basePath = DEFAULT_DATA_PATH) {
 
         console.log(`[loadFromPath] Successfully loaded ${packets.length} hour-level bins from ${basePath}`);
         console.log(`[loadFromPath] Multi-resolution manager ready with ${fetchResManager.indices.size} resolution indices`);
-        console.log(`[loadFromPath] Preloaded single-file resolutions: hours(${hoursPackets.length}), minutes(${minutesPackets.length}), seconds(${secondsPackets.length})`);
+        console.log(`[loadFromPath] Preloaded single-file resolutions: hours(${hoursPackets.length}), minutes(${minutesPackets.length}), 10s(${tenSecPackets.length}), seconds(${secondsPackets.length})`);
 
         // Don't set initial zoom indicator here - wait for overview chart to determine resolution
         // The onResolutionChange callback will sync the packets view with the overview
@@ -5878,6 +6188,7 @@ function parseSecondsCSV(csvText, resolution = 'seconds') {
     const binSizeMap = {
         'hours': 3_600_000_000,
         'minutes': 60_000_000,
+        '10s': 10_000_000,
         'seconds': 1_000_000
     };
     return parsePacketCSV(csvText, {
