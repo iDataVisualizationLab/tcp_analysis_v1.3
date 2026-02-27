@@ -3,6 +3,42 @@
 
 import { getFlagType } from '../tcp/flags.js';
 
+/**
+ * Build an index of bins grouped by src_ip for fast parent/child lookup.
+ * Used during resolution transitions to match fine bins to coarse bins.
+ */
+function buildBinIndex(data) {
+    const byIp = new Map();
+    for (const d of data) {
+        if (!d.src_ip) continue;
+        if (!byIp.has(d.src_ip)) byIp.set(d.src_ip, []);
+        byIp.get(d.src_ip).push(d);
+    }
+    for (const bins of byIp.values()) {
+        bins.sort((a, b) => (a.bin_start || a.binCenter || 0) - (b.bin_start || b.binCenter || 0));
+    }
+    return byIp;
+}
+
+/**
+ * Binary search for the bin containing a given time for a specific IP.
+ */
+function findContainingBin(srcIp, time, index) {
+    const bins = index.get(srcIp);
+    if (!bins || bins.length === 0) return null;
+    let lo = 0, hi = bins.length - 1;
+    while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        const bin = bins[mid];
+        const start = bin.bin_start != null ? bin.bin_start : bin.binCenter;
+        const end = bin.bin_end != null ? bin.bin_end : start + 1;
+        if (time >= start && time < end) return bin;
+        if (time < start) hi = mid - 1;
+        else lo = mid + 1;
+    }
+    return null;
+}
+
 // Canonical flag ordering for vertical separation (TCP lifecycle order)
 const FLAG_PHASE_ORDER = [
     'SYN', 'SYN+ACK',
@@ -48,7 +84,10 @@ export function renderCircles(layer, binned, options) {
         createTooltipHTML,
         FLAG_CURVATURE,
         d3,
-        separateFlags = false
+        separateFlags = false,
+        onCircleHighlight = null,
+        onCircleClearHighlight = null,
+        transitionOpts = null
     } = options;
 
     if (!layer) return;
@@ -212,17 +251,60 @@ export function renderCircles(layer, binned, options) {
         return flagColors[flagStr] || flagColors.OTHER;
     };
 
+    // Helper to compute final cx for a datum
+    const getFinalCx = d => xScale(Math.floor(d.binned && Number.isFinite(d.binCenter) ? d.binCenter : d.timestamp));
+
+    // Cancel any in-flight transitions from previous renders
+    layer.selectAll('.direction-dot').interrupt();
+
+    // Build animation maps if resolution is transitioning
+    let enterStartCx = null;   // zoom-in: entering circles start at parent coarse bin cx
+    let exitTargetIndex = null; // zoom-out: exiting circles converge to target coarse bin
+
+    if (transitionOpts?.previousData?.length > 0) {
+        if (transitionOpts.type === 'zoom-in') {
+            const parentIndex = buildBinIndex(transitionOpts.previousData);
+            enterStartCx = new Map();
+            for (const fine of processed) {
+                const time = fine.binCenter || fine.timestamp;
+                const parent = findContainingBin(fine.src_ip, time, parentIndex);
+                if (parent) {
+                    enterStartCx.set(getDataKey(fine), xScale(Math.floor(parent.binCenter)));
+                }
+            }
+            if (enterStartCx.size === 0) enterStartCx = null;
+        } else if (transitionOpts.type === 'zoom-out') {
+            exitTargetIndex = buildBinIndex(processed.map(d => ({
+                src_ip: d.src_ip,
+                bin_start: d.bin_start,
+                bin_end: d.bin_end,
+                binCenter: d.binCenter
+            })));
+        }
+    }
+
+    const transitionDuration = transitionOpts?.duration || 250;
+
     layer.selectAll('.direction-dot')
         .data(processed, getDataKey)
         .join(
-            enter => enter.append('circle')
+            enter => {
+                const sel = enter.append('circle')
                 .attr('class', d => `direction-dot ${d.binned && d.count > 1 ? 'binned' : ''}`)
                 .attr('r', d => d.binned && d.count > 1 ? rScale(d.count) : RADIUS_MIN)
                 .attr('data-orig-r', d => d.binned && d.count > 1 ? rScale(d.count) : RADIUS_MIN)
                 .attr('fill', getFlagColor)
-                .attr('cx', d => xScale(Math.floor(d.binned && Number.isFinite(d.binCenter) ? d.binCenter : d.timestamp)))
+                .attr('cx', d => {
+                    // For zoom-in: start at parent coarse circle's position
+                    if (enterStartCx) {
+                        const startX = enterStartCx.get(getDataKey(d));
+                        if (startX !== undefined) return startX;
+                    }
+                    return getFinalCx(d);
+                })
                 .attr('cy', d => d.yPosWithOffset)
                 .style('cursor', 'pointer')
+                .style('opacity', enterStartCx ? 0.3 : null)
                 .on('mouseover', (event, d) => {
                     const dot = d3.select(event.currentTarget);
                     dot.classed('highlighted', true).style('stroke', '#000').style('stroke-width', '2px');
@@ -230,9 +312,9 @@ export function renderCircles(layer, binned, options) {
                     dot.attr('r', baseR);
                     const pairsToArc = d.ipPairs || [{ src_ip: d.src_ip, dst_ip: d.dst_ip }];
                     pairsToArc.forEach(p => {
-                        // Calculate actual y positions with offsets for both source and destination
+                        // Source y: use circle's actual position (includes flag separation offset)
                         const pairKey = makeIpPairKey(p.src_ip, p.dst_ip);
-                        const srcY = calculateYPosWithOffset(d.src_ip, pairKey) || d.yPosWithOffset;
+                        const srcY = d.yPosWithOffset;
                         const dstY = calculateYPosWithOffset(p.dst_ip, pairKey);
                         const arcOpts = { xScale, ipPositions, pairs, findIPPosition, flagCurvature: FLAG_CURVATURE, srcY, dstY };
                         const arcD = { src_ip: p.src_ip, dst_ip: p.dst_ip, binned: d.binned, binCenter: d.binCenter, timestamp: d.timestamp, flagType: d.flagType, flags: d.flags };
@@ -278,6 +360,11 @@ export function renderCircles(layer, binned, options) {
                         }
                     });
                     tooltip.style('display', 'block').html(createTooltipHTML(d));
+                    // Highlight source/destination IP labels and rows
+                    if (onCircleHighlight) {
+                        const dstIps = new Set(pairsToArc.map(p => p.dst_ip));
+                        onCircleHighlight(d.src_ip, dstIps);
+                    }
                 })
                 .on('mousemove', e => { tooltip.style('left', `${e.pageX + 40}px`).style('top', `${e.pageY - 40}px`); })
                 .on('mouseout', e => {
@@ -285,15 +372,53 @@ export function renderCircles(layer, binned, options) {
                     dot.classed('highlighted', false).style('stroke', null).style('stroke-width', null);
                     const baseR = +dot.attr('data-orig-r') || RADIUS_MIN; dot.attr('r', baseR);
                     mainGroup.selectAll('.hover-arc').remove(); tooltip.style('display', 'none');
-                }),
+                    if (onCircleClearHighlight) onCircleClearHighlight();
+                });
+
+                // Animate entering circles from parent position (zoom-in)
+                if (enterStartCx) {
+                    sel.transition().duration(transitionDuration)
+                        .attr('cx', getFinalCx)
+                        .style('opacity', 1);
+                }
+                return sel;
+            },
             update => update
                 .attr('class', d => `direction-dot ${d.binned && d.count > 1 ? 'binned' : ''}`)
                 .attr('r', d => d.binned && d.count > 1 ? rScale(d.count) : RADIUS_MIN)
                 .attr('data-orig-r', d => d.binned && d.count > 1 ? rScale(d.count) : RADIUS_MIN)
                 .attr('fill', getFlagColor)
-                .attr('cx', d => xScale(Math.floor(d.binned && Number.isFinite(d.binCenter) ? d.binCenter : d.timestamp)))
+                .attr('cx', getFinalCx)
                 .attr('cy', d => d.yPosWithOffset)
-                .style('cursor', 'pointer')
+                .style('cursor', 'pointer'),
+            exit => {
+                // Zoom-out: converge exiting fine circles toward their coarse parent
+                if (transitionOpts?.type === 'zoom-out' && exitTargetIndex) {
+                    exit.each(function(d) {
+                        const time = d.binCenter || d.timestamp;
+                        const target = findContainingBin(d.src_ip, time, exitTargetIndex);
+                        const node = d3.select(this);
+                        if (target) {
+                            node.transition().duration(transitionDuration)
+                                .attr('cx', xScale(Math.floor(target.binCenter)))
+                                .style('opacity', 0)
+                                .remove();
+                        } else {
+                            node.transition().duration(transitionDuration * 0.6)
+                                .style('opacity', 0)
+                                .remove();
+                        }
+                    });
+                    return exit;
+                }
+                // Zoom-in: quickly fade out old coarse circles
+                if (transitionOpts?.type === 'zoom-in') {
+                    return exit.transition().duration(transitionDuration * 0.5)
+                        .style('opacity', 0).remove();
+                }
+                // No transition: instant removal
+                return exit.remove();
+            }
         );
 
     // Return processed data so callers can access final positions (with flag separation)

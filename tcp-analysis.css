@@ -75,7 +75,7 @@ h1 {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 6px 10px;
+    padding: 10px 12px;
     background: #f8f9fa;
     border-bottom: 1px solid #dee2e6;
     border-radius: 0;
@@ -91,13 +91,13 @@ h1 {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 11px;
+    font-size: 15px;
     font-weight: 600;
     color: #495057;
 }
 #control-panel-collapse-icon {
-    font-size: 10px;
-    color: #868e96;
+    font-size: 14px;
+    color: #495057;
     transition: transform 0.2s;
 }
 /* Collapsed state: hide body, keep title bar */
@@ -116,6 +116,17 @@ h1 {
 #control-panel.control-panel-collapsed #resetView {
     display: none;
 }
+@import url('shared.css');
+#resetView {
+    width: 100%;
+    margin: 0;
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+    border-top: 1px solid #dee2e6;
+    border-bottom: none;
+    padding: 10px 0;
+}
 .controls {
     margin-bottom: 0;
     display: flex;
@@ -133,6 +144,10 @@ h1 {
     flex-direction: column;
     gap: 5px;
 }
+.control-group + .control-group {
+    border-top: 1px solid #f0f0f0;
+    padding-top: 10px;
+}
 /* Collapsible control-group sections */
 .control-group.collapsible > .collapsible-header {
     display: flex;
@@ -143,9 +158,15 @@ h1 {
     padding: 2px 0;
 }
 .control-group.collapsible > .collapsible-header .collapse-icon {
-    font-size: 10px;
-    color: #868e96;
+    font-size: 14px;
+    color: #495057;
     transition: transform 0.2s;
+}
+.control-group.collapsible > .collapsible-header:hover {
+    color: #212529;
+}
+.control-group.collapsible > .collapsible-header:hover .collapse-icon {
+    color: #212529;
 }
 .control-group.collapsible > .collapsible-body {
     transition: max-height 0.3s ease, opacity 0.2s ease;
@@ -238,24 +259,48 @@ label {
     transition: opacity 0.15s ease-out;
 }
 .row-highlight.active {
-    opacity: 0.15 !important;
+    opacity: 0.18 !important;
+    fill: #868e96 !important;
 }
 .row-highlight.self {
-    opacity: 0.25 !important;
-    fill: #ffd43b !important;
+    opacity: 0.28 !important;
+    fill: #495057 !important;
+}
+
+/* Expand/Collapse All sub-rows button — floats in the left margin */
+#expand-all-btn {
+    position: absolute;
+    left: 10px;
+    z-index: 10;
+    cursor: pointer;
+    opacity: 0.75;
+    transition: opacity 0.2s ease, transform 0.15s ease;
+    pointer-events: auto;
+    border-radius: 50%;
+    line-height: 0;
+}
+#expand-all-btn:hover {
+    opacity: 1;
+    transform: scale(1.15);
 }
 
 /* Sub-row highlight styles for pair-specific connectivity */
 .sub-row-highlight {
-    pointer-events: all;
+    pointer-events: none;
     transition: opacity 0.15s ease-out;
 }
+/* Narrow hover targets limited to the IP label area */
+.sub-row-hover-target {
+    pointer-events: all;
+    cursor: pointer;
+}
 .sub-row-highlight.active {
-    opacity: 0.15 !important;
+    opacity: 0.18 !important;
+    fill: #868e96 !important;
 }
 .sub-row-highlight.self {
-    opacity: 0.25 !important;
-    fill: #ffd43b !important;
+    opacity: 0.28 !important;
+    fill: #495057 !important;
 }
 
 /* Node label styles for connectivity highlighting */
@@ -267,10 +312,10 @@ label {
 }
 .node-label.highlighted {
     font-weight: bold;
-    fill: #1971c2;
+    fill: #000;
 }
 .node-label.connected {
-    fill: #1971c2;
+    fill: #000;
     font-weight: 500;
 }
 
@@ -524,21 +569,6 @@ svg {
     gap: 8px;
     justify-content: flex-end;
 }
-.modal-close-btn {
-    border: 1px solid #ced4da;
-    background: #fff;
-    border-radius: 4px;
-    padding: 5px 8px;
-    cursor: pointer;
-}
-.modal-primary-btn {
-    border: 1px solid #0d6efd;
-    background: #0d6efd;
-    color: #fff;
-    border-radius: 4px;
-    padding: 5px 8px;
-    cursor: pointer;
-}
 
 /* Prevent overlay container from blocking interactions as well */
 #chart-bottom-overlay { pointer-events: none; }
@@ -645,4 +675,41 @@ svg {
 #zoomOutBtn:disabled, #zoomInBtn:disabled {
     cursor: not-allowed;
     opacity: 0.5;
+}
+
+/* CSV/data loading progress bar */
+#csvProgress {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    width: 360px;
+    max-width: 80%;
+    background: #fff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 20px 24px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+    z-index: 100;
+    text-align: center;
+}
+#csvProgressLabel {
+    font-size: 13px;
+    font-weight: 600;
+    color: #495057;
+    margin-bottom: 10px;
+}
+.csv-progress-track {
+    width: 100%;
+    height: 8px;
+    background: #e9ecef;
+    border-radius: 4px;
+    overflow: hidden;
+}
+.csv-progress-bar {
+    width: 0%;
+    height: 100%;
+    background: linear-gradient(90deg, #007bff, #0056b3);
+    border-radius: 4px;
+    transition: width 0.25s ease;
 }

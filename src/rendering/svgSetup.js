@@ -32,6 +32,16 @@ export function createSVGStructure(options) {
     const svg = svgContainer.append('g')
         .attr('transform', `translate(${margin.left},${margin.top})`);
 
+    // Transparent rect to capture pointer events for zoom/pan.
+    // Without this, the <g> element only receives events on its painted children,
+    // leaving gaps where scroll-to-zoom wouldn't work.
+    svg.append('rect')
+        .attr('class', 'zoom-capture')
+        .attr('width', width)
+        .attr('height', height)
+        .style('fill', 'none')
+        .style('pointer-events', 'all');
+
     // Create clip path for content bounds
     svg.append('defs').append('clipPath')
         .attr('id', 'clip')
@@ -234,11 +244,12 @@ export function renderIPRowLabels(options) {
             const labelNode = node.select('.node-label').node();
 
             // Position triangle to the left of the label text using actual text width
+            // Extra spacing (18px) accounts for label expansion when highlighted (bold + larger font)
             let toggleX = -24;
             try {
                 const bbox = labelNode.getBBox();
                 // bbox.x is negative (text-anchor: end), so left edge = bbox.x
-                toggleX = bbox.x - 10;
+                toggleX = bbox.x - 18;
             } catch (_) {}
 
             const toggle = node.append('g')
@@ -265,16 +276,6 @@ export function renderIPRowLabels(options) {
                 .attr('stroke-width', 2)
                 .attr('stroke-linecap', 'round')
                 .attr('stroke-linejoin', 'round');
-
-            // Pair count badge
-            toggle.append('text')
-                .attr('class', 'pair-count-badge')
-                .attr('x', -12)
-                .attr('dy', '.35em')
-                .attr('text-anchor', 'end')
-                .style('font-size', '9px')
-                .style('fill', '#999')
-                .text(pairCount);
 
             // Stop mousedown from triggering the drag-reorder behavior
             toggle
@@ -327,7 +328,8 @@ export function renderIPRowLabels(options) {
                 const partnerIp = parts[0] === ip ? parts[1] : parts[0];
                 const centerY = baseY + pairIndex * (subRowHeight + SUB_ROW_GAP);
 
-                const rect = highlightGroup.append('rect')
+                // Visual highlight rect spans full chart width (no pointer events)
+                highlightGroup.append('rect')
                     .attr('class', 'sub-row-highlight')
                     .datum({ ip, partnerIp, pairKey, pairIndex })
                     .attr('x', -150)
@@ -338,9 +340,16 @@ export function renderIPRowLabels(options) {
                     .style('opacity', 0);
 
                 // Index 0 hover is handled by the main IP label;
-                // other sub-rows need their own hover targets
+                // other sub-rows get a narrow hover target limited to the label area
                 if (pairIndex > 0) {
-                    rect
+                    highlightGroup.append('rect')
+                        .attr('class', 'sub-row-hover-target')
+                        .datum({ ip, partnerIp, pairKey, pairIndex })
+                        .attr('x', -150)
+                        .attr('y', centerY - subRowHeight / 2)
+                        .attr('width', 150)
+                        .attr('height', subRowHeight)
+                        .style('fill', 'transparent')
                         .style('pointer-events', 'all')
                         .on('mouseover', function() {
                             if (onHighlight) {

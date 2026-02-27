@@ -9,8 +9,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This is a **dual-visualization network traffic analysis system** built with D3.js v7 for analyzing TCP packet data and attack patterns. It provides two complementary views:
 
-1. **Network TimeArcs** (`attack-network.html` → `attack-network.js`) - Arc-based visualization of attack events over time with force-directed IP positioning. **Default mode: Force Layout** (2D force-directed network graph); Timearcs mode (arc-based timeline) available via radio toggle
-2. **TCP Connection Analysis** (`tcp-analysis.html` → `tcp-analysis.js`) - Detailed packet-level visualization with stacked bar charts and flow reconstruction
+1. **Network TimeArcs** (`attack-network.html` → `attack-network.js`) - Arc-based visualization of attack events over time with force-directed IP positioning. **Default mode: Force layout network view** (2D force-directed network graph); Timearcs Time Line View (arc-based timeline) available via radio toggle
+2. **TCP Connection Analysis** (`tcp-analysis.html` → `tcp-analysis.js`) - Detailed packet-level visualization with three named UI components:
+   - **Packet View** — main visualization area: stacked circles, arcs, time axis (`#chart-column`)
+   - **Overview Bar chart** — stacked flow bars at bottom, brush-navigable time range (`#overview-container`)
+   - **Control Panel** — floating draggable panel: IP selection, legends, view controls (`#control-panel`)
 
 ## Running the Application
 
@@ -35,16 +38,16 @@ The `index.html` redirects to `attack-network.html` by default.
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  Main Visualizations                                     │
-│  attack-network.js (~3900 LOC)   - Arc network view      │
+│  attack-network.js (~2000 LOC)   - Arc network view      │
 │  tcp-analysis.js (~4600 LOC)     - Packet analysis view  │
 └──────────────────────────┬──────────────────────────────┘
                            │
 ┌──────────────────────────┴──────────────────────────────┐
 │  Supporting Modules                                      │
-│  control-panel.js - Floating control panel (drag/collapse)│
+│  control-panel.js - Control Panel UI (drag/collapse)     │
 │  sidebar.js      - IP/flow selection UI                  │
 │  legends.js      - Legend rendering                      │
-│  overview_chart.js - Stacked flow overview + brush nav   │
+│  overview_chart.js - Overview Bar chart + brush nav      │
 │  folder_integration.js (~1300 LOC) - Folder data coord   │
 │  folder_loader.js - Chunked folder data loading          │
 │  viewer_loader.js - Viewer initialization utilities      │
@@ -55,21 +58,27 @@ The `index.html` redirects to `attack-network.html` by default.
 │                                                          │
 │  rendering/   bars.js, circles.js, arcPath.js, rows.js   │
 │               arcInteractions.js, highlightUtils.js      │
-│               tooltip.js                                 │
+│               tooltip.js, svgSetup.js, initialRender.js  │
 │  scales/      scaleFactory.js, distortion.js (fisheye)   │
+│               bifocal.js (focus+context layout math)     │
 │  layout/      forceSimulation.js, force_network.js       │
+│               timearcs_layout.js (~1600 LOC, class)      │
 │  interaction/ zoom.js, dragReorder.js, resize.js         │
-│  data/        binning.js, csvParser.js, flowReconstruction.js
+│  data/        binning.js (visible packets, bar width calc) │
+│               csvParser.js, flowReconstruction.js        │
 │               resolution-manager.js, data-source.js      │
-│               component-loader.js, csv-resolution-manager.js
+│               component-loader.js, csv-resolution-manager.js│
 │               aggregation.js, flow-loader.js             │
 │               flow-list-loader.js (lazy CSV loading)     │
+│               adaptive-overview-loader.js                │
+│               packet-filter.js, flow-data-handler.js     │
 │  tcp/         flags.js (TCP flag classification)         │
 │  groundTruth/ groundTruth.js (attack event loading)      │
 │  mappings/    decoders.js, loaders.js                    │
 │  workers/     packetWorkerManager.js                     │
 │  plugins/     d3-fisheye.js                              │
-│  ui/          legend.js                                  │
+│  ui/          legend.js, bifocal-handles.js              │
+│               loading-indicator.js                       │
 │  utils/       formatters.js, helpers.js                  │
 │  config/      constants.js                               │
 └──────────────────────────────────────────────────────────┘
@@ -80,13 +89,13 @@ The `index.html` redirects to `attack-network.html` by default.
 1. **CSV Input** → `csvParser.js` stream parsing OR folder-based chunked loading
 2. **Packet Objects** → flow reconstruction, force layout positioning
 3. **Ground Truth** → `groundTruth.js` loads attack event annotations from CSV
-4. **Binning** → adaptive time-based aggregation (`binning.js`)
+4. **Pre-binned Data** → Multi-resolution CSV files loaded by `csv-resolution-manager.js` (hours/minutes/seconds/100ms/10ms/1ms/raw)
 5. **Resolution Management** → `resolution-manager.js` handles zoom-level data with LRU caching
-6. **Rendering** → stacked bars by flag type, arcs between IPs
+6. **Rendering** → stacked bars by flag type, arcs between IPs (`initialRender.js` prepares data, `bars.js`/`circles.js` render)
 
-**Flow Data for Overview Chart** (tcp-analysis.js:1703-1757):
+**Flow Data for Overview Bar chart** (tcp-analysis.js:1703-1757):
 - When IPs are selected, `updateIPFilter()` is called (async function)
-- Uses adaptive multi-resolution loader (`flow_bins_index.json`) for efficient overview rendering
+- Uses adaptive multi-resolution loader (`flow_bins_index.json`) for efficient Overview Bar chart rendering
 - Falls back to `flow_bins.json` or chunk loading if multi-resolution not available
 - For v3 format (`chunked_flows_by_ip_pair`), filters chunks by IP pair first for efficiency
 - Passes filtered/aggregated data to `overview_chart.js` for categorization and binning
@@ -164,23 +173,47 @@ The code auto-detects format from `manifest.json` and loads appropriately.
 
 ### Two Main Visualization Files
 
-- `attack-network.js` (~3900 LOC) - Arc network view with force-directed IP layout
+- `attack-network.js` (~2000 LOC) - Arc network view orchestrator (data loading, mode switching, UI wiring)
 - `tcp-analysis.js` (~4600 LOC) - Detailed packet analysis with stacked bars
 
-Both are monolithic files that compose modules from `/src`. They maintain extensive internal state (IP positions, selections, zoom state) and trigger re-renders on state changes.
+Both compose modules from `/src` and maintain extensive internal state (IP positions, selections, zoom state).
 
-### Overview Chart
+### TimearcsLayout Class
 
-The `overview_chart.js` module (~900 LOC) provides:
-- Stacked bar overview of invalid flows by reason
-- Brush-based time range selection synced with main chart zoom
-- Legend integration for filtering by invalid reason/close type
+`src/layout/timearcs_layout.js` (~1600 LOC) encapsulates the timearcs arc visualization, extracted from `attack-network.js`. Mirrors the `ForceNetworkLayout` pattern: one class with constructor options, separate `setData()` and `render()` calls, and pull-based context retrieval via callbacks.
+
+Key responsibilities:
+- Force simulation setup (component separation, hub attraction, y-constraints)
+- Arc rendering with gradient coloring by attack type
+- IP label layout and hover highlighting
+- Bifocal (focus+context) lens distortion
+- Drag-to-brush selection system
+- Animated transitions between layout modes
+
+**Loading Bar** (`tcp-analysis.html`, `tcp-analysis.css`):
+- A progress bar is shown in `tcp-analysis.html` while data is loading on page open
+- Disappears once initial render completes
+
+### Overview Bar chart
+
+The `overview_chart.js` module (~1100 LOC) provides:
+- Stacked bar overview of invalid flows by reason (the **Overview Bar chart**)
+- Brush-based time range selection synced with Packet View zoom
+- Legend integration: clicking a legend item **hides/shows bars of that category and recomputes bar heights** based on the remaining visible data's max
+
+**Legend filter behavior** (`overview_chart.js`):
+- Module-level `overviewHiddenReasons` (Set) and `overviewHiddenCloseTypes` (Set) track legend-toggled visibility; these persist across chart recreations (e.g. IP filter changes)
+- Clicking a legend item toggles the appropriate set then calls `recomputeOverviewBars()`
+- `recomputeOverviewBars()` dispatches to `_recomputeFlows()` or `_recomputeAdaptive()` based on which rendering path is active
+- Two-pass recompute: (1) compute new `sharedMax` from visible-only categories, (2) restack y-positions per bin from scratch — required because stacking means hiding one bar shifts its neighbors
+- `_applyPositions()` applies results: `display:none` for hidden segments, animated 200ms y/height transitions for visible ones
+- Both the overview-local sets AND the main-app filter sets (`hiddenInvalidReasonsRef`/`hiddenCloseTypesRef`) are considered; `updateOverviewInvalidVisibility()` now calls `recomputeOverviewBars()` instead of CSS-only show/hide
 
 **Current Implementation** (Multi-resolution adaptive loading):
 - `tcp-analysis.js` initializes `AdaptiveOverviewLoader` from `flow_bins_index.json`
 - Loader selects appropriate resolution based on visible time range (hour → 10min → 1min)
 - Filters pre-aggregated flow bins by selected IP pairs
-- Creates synthetic flows from bin data for overview chart
+- Creates synthetic flows from bin data for Overview Bar chart
 - **Fallback chain**: adaptive loader → `flow_bins.json` → chunk loading
 
 **Multi-resolution index** (`flow_bins_index.json`):
@@ -281,7 +314,7 @@ The `packets` column contains embedded packet data: `delta_ts:flags:dir,...`
 **Lazy Loading Behavior**:
 - On page load: Only `index.json` is fetched (~87KB)
 - On IP selection: No CSV files loaded yet; UI shows "Flow List Available"
-- On overview chart click: Only relevant IP pair CSVs are fetched for the clicked time range
+- On Overview Bar chart click: Only relevant IP pair CSVs are fetched for the clicked time range
 - Loaded CSVs are cached in memory for subsequent requests
 
 **Key Files**:
@@ -292,7 +325,7 @@ The `packets` column contains embedded packet data: `delta_ts:flags:dir,...`
 - Flow list popup works without loading chunk files
 - If `fp` column present: "View Packets" visualizes embedded packet data (no chunk files needed)
 - If `fp` column absent: "View Packets" and "Export CSV" buttons are disabled
-- Overview chart still uses adaptive flow_bins for visualization
+- Overview Bar chart still uses adaptive flow_bins for visualization
 - CSV format is ~45% smaller than JSON; all files under GitHub's 100MB limit
 
 ### Packet Data Multi-Resolution (v3.3)
@@ -347,6 +380,27 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 - Subsequent pairs grow downward within the row's allocated height
 - `makeIpPairKey(srcIp, dstIp)` creates canonical keys (alphabetically sorted)
 
+**Sub-Row Ghost Arcs** (`src/rendering/circles.js`, `src/rendering/svgSetup.js`):
+- Persistent ghost arcs show IP pair connections at the sub-row level
+- Rendered as low-opacity arcs connecting each IP pair's sub-row position
+- Toggled via a control in the Control Panel
+- `svgSetup.js` handles SVG layer setup and hover area sizing; hover hit areas are limited to the IP label width to prevent overlap with chart content
+
+**Row Hover Highlighting**:
+- Hovering an IP row uses grey shades (not blue/yellow)
+- Highlights all bins in the row that belong to the hovered IP pair, not just the first matching bin
+
+**IP Label Hover Styling** (consistent across all views):
+- Hovered IP: bold, black (`#000`)
+- Connected IPs: font-weight 500, black (`#000`)
+- Non-connected IPs: faded to opacity 0.25
+- Applied in `timearcs_layout.js`, `rows.js` (TCP Analysis), and `tcp-analysis.css`
+
+**Circle Hover Callbacks** (`circles.js`):
+- `onCircleHighlight(srcIp, dstIps)` — called on circle mouseover; highlights source/destination IP rows and labels
+- `onCircleClearHighlight()` — called on circle mouseout; clears all highlights
+- TCP Analysis wires these via `renderCirclesWithOptions()` to apply `.highlighted`, `.connected`, `.faded` CSS classes
+
 **Arc Path Connections** (`src/rendering/arcPath.js`):
 - `arcPathGenerator()` accepts optional `srcY` and `dstY` for offset positions
 - Hover handlers calculate both source and destination offsets using `calculateYPosWithOffset()`
@@ -355,7 +409,7 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 **Row Collapse Behavior**:
 - All IP rows with multiple pairs start **collapsed by default** (`defaultCollapseApplied` flag)
 - `state.layout.collapsedIPs` Set tracks which IPs have their sub-rows merged
-- Click individual IP labels to expand/collapse; "Collapse All"/"Expand All" buttons in control panel
+- Click individual IP labels to expand/collapse; "Collapse All"/"Expand All" buttons rendered inline to the left of each IP row label (not in the Control Panel)
 - Collapsed rows merge all pair bins at same (time, yPos, flagType) into single circles
 
 **Key Data Structures**:
@@ -366,15 +420,36 @@ The visualization uses a sophisticated layout system to prevent overlapping when
 // collapsedIPs: Set<ip> - IPs whose sub-rows are collapsed
 ```
 
+### Circle View Modes (TCP Analysis)
+
+**Separate Flags** (`#separateFlags` checkbox, `state.ui.separateFlags`):
+- Prevents overlapping circles of different flag types at the same time bin
+- Groups co-located circles by `(binCenter, yPosWithOffset)`, sorts by TCP lifecycle phase order (`FLAG_PHASE_ORDER`: SYN → SYN+ACK → ACK → PSH → FIN → RST → OTHER), then spreads them vertically within the available sub-row height
+- Implemented in `src/rendering/circles.js:157-191`
+- Named "Separate Flags" in the UI (not "Stacked Circles" — avoid that term)
+- Default: off (`separateFlags: false` in `tcp-analysis.js:252`)
+
+### Link Rendering (TCP Analysis Packet View)
+
+Three types of arc links connect circles in the Packet View:
+
+1. **Hover arcs** (temporary) — drawn on circle mouseover in `circles.js:228-281`. Colored arc from source to destination IP at the circle's actual sub-row offset position. Includes SVG `<marker>` arrowhead at the destination end. Removed on mouseout.
+
+2. **Sub-row arcs** (`#showSubRowArcs` toggle, `state.ui.showSubRowArcs`) — persistent low-opacity arcs connecting IP pair sub-rows. Drawn by `drawSubRowArcs()` in `tcp-analysis.js`. Toggled via Control Panel checkbox.
+
+3. **TCP Flow arcs** (`#showTcpFlows` toggle, `state.ui.showTcpFlows`) — persistent arcs for selected TCP flows, drawn by `drawSelectedFlowArcs()` in `tcp-analysis.js:1654-1758`. Grouped by time bucket, src/dst IP pair, and flag type. Phase filters (establishment/data transfer/closing) control which flows are shown.
+
+Note: Auto-enabling links at raw zoom level (as in the original requirements) is **not yet implemented**.
+
 ### Force-Directed Layout
 
-- **TimeArcs**: Complex multi-force simulation with component separation, hub attraction, y-constraints
+- **TimeArcs** (`src/layout/timearcs_layout.js`): Complex multi-force simulation with component separation, hub attraction, y-constraints
 - **Force Network** (`src/layout/force_network.js`): 2D force layout used as the **default view mode** in TimeArcs. Aggregates arc data by IP pair + attack type, renders with D3 force simulation. Supports `precalculate()` for pre-computing positions (used during animated transitions) and `staticStart` rendering. On data load, the timearcs render completes first, then auto-transitions to force layout via `transitionToForceLayout()`
 - **BarDiagram**: Uses vertical IP order from TimeArcs directly (no separate force layout)
 
 **Network Mode Toggle** (`attack-network.html`):
-- Radio buttons switch between "Timearcs" (arc timeline) and "Force Layout" (2D network graph)
-- Default: Force Layout (`layoutMode = 'force_layout'`, `labelMode = 'force_layout'`)
+- Radio buttons switch between "Timearcs Time Line View" (arc timeline) and "Force layout network view" (2D network graph)
+- Default: Force layout network view (`layoutMode = 'force_layout'`, `labelMode = 'force_layout'`)
 - Force layout uses `attack_group` for coloring; Timearcs uses `attack` (finer-grained)
 
 ### Brush Selection System (attack-network.js)
@@ -393,12 +468,17 @@ Drag-to-brush selection allows users to select arcs/nodes for analysis and expor
 - `getLinkHighlightInfo()` — compute active IPs and attack color from link datum (handles both timearcs arc shape and force link shape)
 - `highlightEndpointLabels()` / `unhighlightEndpointLabels()` — bold, enlarge, color active IP labels; dim others
 - `ipFromDatum()` (internal) — normalizes datum to IP string (timearcs labels bind raw strings, force layout nodes bind `{id, degree}` objects)
+- `showArcArrowhead(container, pathElement, datum, color)` — renders a filled polygon arrowhead on a hovered timearcs arc, positioned at the arc midpoint
+- `showLineArrowhead(container, datum, color, targetRadius, strokeWidth)` — renders a directional arrowhead on a hovered force-layout link; returns base position so the line can be trimmed to not overlap the arrow
+- `removeArrowheads(container)` — cleans up arrowhead overlays on mouseout
 
-### Floating Control Panel
+**Directional arrows** appear on mouseover only (not permanently, to avoid clutter). Both timearcs arcs (`arcInteractions.js:74-75`) and force layout links (`force_network.js:438-454`) call these. In the TCP Analysis Packet View, `circles.js` uses SVG `<marker>` definitions (`marker-end`) to draw arrowheads on hover arcs between circles.
 
-The control panel (`control-panel.js`) is a `position: fixed` aside with drag-to-move and click-to-collapse behavior:
+### Control Panel
+
+The Control Panel (`control-panel.js`) is a `position: fixed` aside with drag-to-move and click-to-collapse behavior:
 - **Drag handle**: Title bar at top — click to collapse/expand, drag to reposition
-- **Zoom controls bar**: Positioned above the panel via `position: absolute; bottom: 100%`. Contains resolution dropdown, current resolution indicator badge, and zoom +/- buttons. Stays visible when panel is collapsed. Moves with the panel on drag.
+- **Zoom controls bar**: Positioned above the Control Panel via `position: absolute; bottom: 100%`. Contains resolution dropdown, current resolution indicator badge, and zoom +/- buttons. Stays visible when panel is collapsed. Moves with the panel on drag.
 - **Controls body**: Scrollable area with IP selection, TCP flags, legends, flow visualization options
 - Panel uses `overflow: visible` so the zoom bar (absolutely positioned above) is not clipped
 
@@ -415,20 +495,20 @@ The fisheye lens effect (`src/plugins/d3-fisheye.js`, wrapped by `src/scales/dis
 - **LRU Cache**: `resolution-manager.js` caches loaded detail chunks with automatic eviction
 - **Multi-resolution loading**: Zoom-level dependent data loading (overview → detail)
 - **IP-pair organization** (v3): Chunks organized by IP pair enable efficient filtering—only load chunks for selected IP pairs instead of scanning all chunks
-- **Adaptive overview resolution**: Coarse bins for full view, fine bins when zoomed
-- **Lazy flow list loading**: CSV files only loaded when user clicks overview chart bars
+- **Adaptive overview resolution**: Coarse bins for full view, fine bins when zoomed (Overview Bar chart)
+- **Lazy flow list loading**: CSV files only loaded when user clicks Overview Bar chart bars
 
 ## Module Dependencies
 
 Main files import heavily from `/src`:
-- **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`, `highlightUtils.js`
-- **Data**: `binning.js`, `flowReconstruction.js`, `csvParser.js`, `aggregation.js`, `resolution-manager.js`, `data-source.js`, `component-loader.js`
-- **Layout**: `forceSimulation.js`, `force_network.js`
+- **Rendering**: `bars.js`, `circles.js`, `arcPath.js`, `rows.js`, `tooltip.js`, `arcInteractions.js`, `highlightUtils.js`, `svgSetup.js`
+- **Data**: `binning.js` (visible packets, bar width), `flowReconstruction.js`, `csvParser.js`, `aggregation.js`, `resolution-manager.js`, `csv-resolution-manager.js`, `data-source.js`, `component-loader.js`, `initialRender.js`
+- **Layout**: `forceSimulation.js`, `force_network.js`, `timearcs_layout.js`
 - **Interaction**: `zoom.js`, `arcInteractions.js`, `dragReorder.js`, `resize.js`
-- **Scales**: `scaleFactory.js`, `distortion.js`
+- **Scales**: `scaleFactory.js`, `distortion.js`, `bifocal.js`
 - **Ground Truth**: `groundTruth.js`
 - **Utils**: `formatters.js` (byte/timestamp formatting), `helpers.js`
-- **UI**: `legend.js`
+- **UI**: `legend.js`, `bifocal-handles.js`, `loading-indicator.js`
 - **Config**: `constants.js` (colors, sizes, debug flags)
 
 ## Original TimeArcs Source

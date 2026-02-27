@@ -50,39 +50,48 @@ export function getFlowColor(flow, flowColors = {}) {
 }
 
 // Create horizontal flow legend for overview chart
-export function createOverviewFlowLegend({ svg, width, height, flowColors = {}, flows = [], hiddenInvalidReasons, hiddenCloseTypes, d3, onToggleReason, onToggleCloseType }) {
+export function createOverviewFlowLegend({ svg, width, height, flowColors = {}, flows = [], counts = null, hiddenInvalidReasons, hiddenCloseTypes, d3, onToggleReason, onToggleCloseType }) {
     try {
         // Remove existing legend
         svg.select('.overview-flow-legend').remove();
 
         const invalidLabels = getInvalidLabels();
         const closeColors = getFlowColors(flowColors);
-        
-        // Calculate counts for each category
-        const isInvalid = (f) => f && (f.closeType === 'invalid' || f.state === 'invalid' || !!f.invalidReason);
-        const isClosedGraceful = (f) => f && f.closeType === 'graceful';
-        const isClosedAbortive = (f) => f && f.closeType === 'abortive';
-        const isClosed = (f) => isClosedGraceful(f) || isClosedAbortive(f);
-        const isOngoingCandidate = (f) => f && !isInvalid(f) && !isClosed(f);
-        const isOpen = (f) => isOngoingCandidate(f) && (f.establishmentComplete === true || f.state === 'established' || f.state === 'data_transfer');
 
-        const invalidFlows = flows.filter(isInvalid);
-        const gracefulCount = flows.filter(isClosedGraceful).length;
-        const abortiveCount = flows.filter(isClosedAbortive).length;
-        const openCount = flows.filter(isOpen).length;
-
-        // Calculate invalid reason counts
-        const invalidReasonCounts = new Map();
         const invalidOrder = ['invalid_ack', 'rst_during_handshake', 'incomplete_no_synack', 'incomplete_no_ack', 'invalid_synack', 'unknown_invalid'];
-        
-        invalidOrder.forEach(reason => invalidReasonCounts.set(reason, 0));
-        invalidFlows.forEach(f => {
-            let reason = getInvalidReason(f);
-            if (!reason) reason = 'unknown_invalid';
-            if (invalidReasonCounts.has(reason)) {
-                invalidReasonCounts.set(reason, invalidReasonCounts.get(reason) + 1);
-            }
-        });
+
+        let gracefulCount, abortiveCount, openCount, invalidReasonCounts;
+
+        if (counts) {
+            // Pre-computed counts path — avoids building synthetic flow objects
+            gracefulCount = counts.graceful || 0;
+            abortiveCount = counts.abortive || 0;
+            openCount = counts.open || 0;
+            invalidReasonCounts = new Map(invalidOrder.map(r => [r, counts[r] || 0]));
+        } else {
+            // Derive counts by filtering individual flow objects
+            const isInvalid = (f) => f && (f.closeType === 'invalid' || f.state === 'invalid' || !!f.invalidReason);
+            const isClosedGraceful = (f) => f && f.closeType === 'graceful';
+            const isClosedAbortive = (f) => f && f.closeType === 'abortive';
+            const isClosed = (f) => isClosedGraceful(f) || isClosedAbortive(f);
+            const isOngoingCandidate = (f) => f && !isInvalid(f) && !isClosed(f);
+            const isOpen = (f) => isOngoingCandidate(f) && (f.establishmentComplete === true || f.state === 'established' || f.state === 'data_transfer');
+
+            const invalidFlows = flows.filter(isInvalid);
+            gracefulCount = flows.filter(isClosedGraceful).length;
+            abortiveCount = flows.filter(isClosedAbortive).length;
+            openCount = flows.filter(isOpen).length;
+
+            invalidReasonCounts = new Map();
+            invalidOrder.forEach(reason => invalidReasonCounts.set(reason, 0));
+            invalidFlows.forEach(f => {
+                let reason = getInvalidReason(f);
+                if (!reason) reason = 'unknown_invalid';
+                if (invalidReasonCounts.has(reason)) {
+                    invalidReasonCounts.set(reason, invalidReasonCounts.get(reason) + 1);
+                }
+            });
+        }
 
         // Build legend items array
         const legendItems = [];

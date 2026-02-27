@@ -59,7 +59,7 @@ export function createTooltipHTML(data) {
         // Single packet tooltip
         const packet = data.originalPackets ? data.originalPackets[0] : data;
         const { utcTime } = formatTimestamp(packet.timestamp);
-        let tooltipContent = `<b>${classifyFlags(packet.flags)}</b><br>`;
+        let tooltipContent = `<b>${packet.flagType || packet.flag_type || classifyFlags(packet.flags)}</b><br>`;
 
         // Show IP:port format
         const srcPort = packet.src_port ?? packet.srcPort;

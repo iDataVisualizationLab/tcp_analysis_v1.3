@@ -1,5 +1,5 @@
-// Control panel logic for IP Connection Analysis
-// This file contains all logic for the control panel UI and its event handlers
+// Control Panel — floating draggable panel for IP Connection Analysis (tcp-analysis.html)
+// Contains all Control Panel UI logic: IP selection, legends, TCP flow controls, and event handlers
 import { getFlowColors, getInvalidLabels, getInvalidReason, getFlowColor } from './legends.js';
 import { MAX_FLOW_LIST_ITEMS, FLOW_LIST_RENDER_BATCH } from './config.js';
 
@@ -63,11 +63,6 @@ export function initControlPanel(options) {
     const resetBtn = document.getElementById('resetView');
     if (resetBtn) {
         resetBtn.style.position = '';
-        resetBtn.style.width = '100%';
-        resetBtn.style.margin = '0';
-        resetBtn.style.padding = '10px 0';
-        resetBtn.style.borderTop = '1px solid #eee';
-        resetBtn.style.borderRadius = '0 0 6px 6px';
         if (options && typeof options.onResetView === 'function') {
             resetBtn.onclick = options.onResetView;
         }
@@ -411,12 +406,12 @@ export function createFlowListCapped(flows, selectedFlowIds, formatBytes, format
 
             // Build button HTML based on whether packet data is available for this flow
             const viewBtnHTML = flowHasPacketData
-                ? `<button class=\"flow-view-btn\" data-flow-id=\"${flow.id}\" style=\"padding:2px 8px; font-size:10px; border:1px solid #2196F3; border-radius:3px; background:#2196F3; color:white; cursor:pointer; font-weight:bold;\" title=\"View packets with arcs\">📊 View Packets</button>`
-                : `<button class=\"flow-view-btn\" data-flow-id=\"${flow.id}\" style=\"padding:2px 8px; font-size:10px; border:1px solid #ccc; border-radius:3px; background:#eee; color:#999; cursor:not-allowed; font-weight:bold;\" title=\"Packet data not available (summary mode)\" disabled>📊 View Packets</button>`;
+                ? `<button class=\"flow-view-btn cp-btn cp-btn-primary\" data-flow-id=\"${flow.id}\" title=\"View packets with arcs\">📊 View Packets</button>`
+                : `<button class=\"flow-view-btn cp-btn\" data-flow-id=\"${flow.id}\" title=\"Packet data not available (summary mode)\" disabled>📊 View Packets</button>`;
 
             const exportBtnHTML = flowHasPacketData
-                ? `<button class=\"flow-export-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ced4da; border-radius:3px; background:#fff; cursor:pointer;\">Export CSV</button>`
-                : `<button class=\"flow-export-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ccc; border-radius:3px; background:#eee; color:#999; cursor:not-allowed;\" title=\"Packet data not available (summary mode)\" disabled>Export CSV</button>`;
+                ? `<button class=\"flow-export-btn cp-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto;\">Export CSV</button>`
+                : `<button class=\"flow-export-btn cp-btn\" data-flow-id=\"${flow.id}\" style=\"margin-left:auto;\" title=\"Packet data not available (summary mode)\" disabled>Export CSV</button>`;
 
             item.innerHTML = `
                 <input type=\"checkbox\" class=\"flow-checkbox\" id=\"flow-${flow.id}\" ${selectedFlowIds.has(String(flow.id)) ? 'checked' : ''}>
@@ -493,8 +488,6 @@ export function wireControlPanelControls(opts) {
     on('ipSearch', 'input', (e) => { if (opts.onIpSearch) opts.onIpSearch(e.target.value); });
     on('selectAllIPs', 'click', () => { if (opts.onSelectAllIPs) opts.onSelectAllIPs(); });
     on('clearAllIPs', 'click', () => { if (opts.onClearAllIPs) opts.onClearAllIPs(); });
-    on('collapseAllRows', 'click', () => { if (opts.onCollapseAllRows) opts.onCollapseAllRows(); });
-    on('expandAllRows', 'click', () => { if (opts.onExpandAllRows) opts.onExpandAllRows(); });
 
     on('showTcpFlows', 'change', (e) => { if (opts.onToggleShowTcpFlows) opts.onToggleShowTcpFlows(e.target.checked); });
     on('showEstablishment', 'change', (e) => { if (opts.onToggleEstablishment) opts.onToggleEstablishment(e.target.checked); });
@@ -558,7 +551,11 @@ export function updateFlagStats(packets, classifyFlags, flagColors) {
     const flagCounts = {};
     packets.forEach(packet => {
         // Use pre-classified flag_type/flagType for binned data, fall back to classifyFlags for raw packets
-        const ft = packet.flagType || packet.flag_type || classifyFlags(packet.flags);
+        let ft = packet.flagType || packet.flag_type || classifyFlags(packet.flags);
+        // Group uncommon flag combinations into OTHER for cleaner stats display
+        if (!flagColors[ft]) {
+            ft = 'OTHER';
+        }
         const count = packet.count || 1;
         flagCounts[ft] = (flagCounts[ft] || 0) + count;
     });
@@ -699,7 +696,7 @@ export function createFlowList(flows, selectedFlowIds, formatBytes, formatTimest
                 <span>${formatBytes(flow.totalBytes)}</span>
                 <span>${duration}s duration</span>
                 <span>${closeTypeText}</span>
-                <button class="flow-export-btn" data-flow-id="${flow.id}" style="margin-left:auto; padding:2px 6px; font-size:10px; border:1px solid #ced4da; border-radius:3px; background:#fff; cursor:pointer;">Export CSV</button>
+                <button class="flow-export-btn cp-btn" data-flow-id="${flow.id}" style="margin-left:auto;">Export CSV</button>
               </div>
               <div style="font-size:10px; color:#999; margin-top:3px;">Start: ${startTime} • End: ${endTime}</div>
             </div>

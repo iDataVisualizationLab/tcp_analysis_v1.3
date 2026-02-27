@@ -76,7 +76,8 @@ import {
 import {
     createTimeArcsZoomHandler,
     createDurationLabelUpdater,
-    clearZoomTimeouts
+    clearZoomTimeouts,
+    resetResolutionTransitionState
 } from './src/interaction/timearcsZoomHandler.js';
 import { createIPFilterController } from './src/interaction/ip-filter-controller.js';
 import { tryLoadFlowList, getFlowListLoader } from './src/data/flow-list-loader.js';
@@ -197,7 +198,7 @@ let bottomOverlayAxisGroup = null;
 let bottomOverlayDurationLabel = null;
 let bottomOverlayWidth = 0;
 let bottomOverlayHeight = 140; // generous to fit axis + legends without changing sizes
-let chartMarginLeft = 150;
+let chartMarginLeft = 180;
 let chartMarginRight = 120;
 // Layers for performance tuning: persistent full-domain layer and dynamic zoom layer
 let fullDomainLayer = null;
@@ -329,6 +330,7 @@ function collapseSubRowsBins(binned, collapsedIPs) {
                 totalBytes: 0,
                 originalPackets: [],
                 ipPairs: [],
+                allIPs: new Set(),
                 _seenPairs: new Set()
             };
             groups.set(key, g);
@@ -338,6 +340,8 @@ function collapseSubRowsBins(binned, collapsedIPs) {
         if (Array.isArray(d.originalPackets)) {
             g.originalPackets.push(...d.originalPackets);
         }
+        if (d.src_ip) g.allIPs.add(d.src_ip);
+        if (d.dst_ip) g.allIPs.add(d.dst_ip);
         const pk = makeIpPairKey(d.src_ip, d.dst_ip);
         if (!g._seenPairs.has(pk)) {
             g._seenPairs.add(pk);
@@ -400,6 +404,135 @@ function applyCollapseOverrides(ipPairOrderByRow) {
 }
 
 /**
+ * Calculate the vertical position for the expand-all button based on visible IPs.
+ * @param {number} marginTop - The chart's top margin (px)
+ */
+function updateExpandAllBtnPosition(marginTop) {
+    const container = document.getElementById('chart-container');
+    const btn = document.getElementById('expand-all-btn');
+    if (!container || !btn) return;
+
+    // Collect y-positions (in container content space) of ALL IPs
+    let minY = Infinity, maxY = -Infinity;
+    for (const [, yPos] of state.layout.ipPositions) {
+        const contentY = yPos + marginTop;
+        if (contentY < minY) minY = contentY;
+        if (contentY > maxY) maxY = contentY;
+    }
+
+    if (minY === Infinity) { btn.style.display = 'none'; return; }
+
+    // Visible viewport in content-space coordinates
+    const viewTop = container.scrollTop;
+    const viewBottom = viewTop + container.clientHeight;
+
+    // Clamp the IP span to the visible viewport
+    const clampedTop = Math.max(minY, viewTop);
+    const clampedBottom = Math.min(maxY, viewBottom);
+
+    let centerY;
+    if (clampedTop <= clampedBottom) {
+        // IPs overlap with viewport — center within the overlap
+        centerY = (clampedTop + clampedBottom) / 2;
+    } else {
+        // No IPs visible — center in viewport
+        centerY = viewTop + container.clientHeight / 2;
+    }
+
+    btn.style.top = (centerY - 12) + 'px'; // 12 = half button height (24px)
+}
+
+/** Scroll listener reference so we don't double-bind */
+let _expandAllScrollBound = false;
+
+/**
+ * Create or update the floating "Expand/Collapse All" sub-row button.
+ * Called after renderIPRowLabels on each render.
+ * @param {number} marginTop - The chart's top margin (px)
+ */
+function createOrUpdateExpandAllBtn(marginTop) {
+    const container = document.getElementById('chart-container');
+    if (!container) return;
+
+    // Only show when multi-pair IPs exist
+    let hasMultiPairIPs = false;
+    if (state.layout.ipPairCounts) {
+        for (const [, count] of state.layout.ipPairCounts) {
+            if (count > 1) { hasMultiPairIPs = true; break; }
+        }
+    }
+
+    let btn = document.getElementById('expand-all-btn');
+    if (!btn) {
+        btn = document.createElement('div');
+        btn.id = 'expand-all-btn';
+        container.appendChild(btn);
+
+        btn.addEventListener('click', () => {
+            if (state.layout.collapsedIPs.size > 0) {
+                // Expand all
+                state.layout.collapsedIPs.clear();
+            } else {
+                // Collapse all
+                for (const ip of state.layout.ipOrder) {
+                    if ((state.layout.ipPairCounts.get(ip) || 1) > 1) {
+                        state.layout.collapsedIPs.add(ip);
+                    }
+                }
+            }
+            isHardResetInProgress = true;
+            visualizeTimeArcs(state.data.filtered);
+            updateTcpFlowPacketsGlobal();
+            drawSelectedFlowArcs();
+            applyInvalidReasonFilter();
+        });
+
+        btn.addEventListener('mouseenter', () => {
+            const circle = btn.querySelector('circle');
+            if (!circle) return;
+            const collapsed = state.layout.collapsedIPs.size > 0;
+            circle.setAttribute('fill', collapsed ? '#5a6268' : '#218838');
+        });
+        btn.addEventListener('mouseleave', () => {
+            const circle = btn.querySelector('circle');
+            if (!circle) return;
+            const collapsed = state.layout.collapsedIPs.size > 0;
+            circle.setAttribute('fill', collapsed ? '#6c757d' : '#28a745');
+        });
+    }
+
+    // Bind scroll + resize listeners once
+    if (!_expandAllScrollBound) {
+        _expandAllScrollBound = true;
+        container.addEventListener('scroll', () => updateExpandAllBtnPosition(marginTop), { passive: true });
+        // ResizeObserver catches layout shifts (overview chart appearing, window resize)
+        new ResizeObserver(() => updateExpandAllBtnPosition(marginTop)).observe(container);
+    }
+
+    btn.style.display = hasMultiPairIPs ? '' : 'none';
+    if (!hasMultiPairIPs) return;
+
+    // Visual state: collapsed → gray + right chevron; expanded → green + down chevron
+    const isCollapsedState = state.layout.collapsedIPs.size > 0;
+    const fill = isCollapsedState ? '#6c757d' : '#28a745';
+    const chevron = isCollapsedState
+        ? 'M -2 -3 L 2 0 L -2 3'   // right chevron (collapsed state)
+        : 'M -3 -2 L 0 2 L 3 -2';  // down chevron (expanded state)
+    const title = isCollapsedState ? 'Expand all sub-rows' : 'Collapse all sub-rows';
+
+    btn.title = title;
+    btn.innerHTML = `
+        <svg width="24" height="24" viewBox="-12 -12 24 24">
+            <circle r="9" fill="${fill}" stroke="#fff" stroke-width="2" style="transition: fill 0.2s ease;"/>
+            <path d="${chevron}" fill="none" stroke="#fff" stroke-width="2.5"
+                  stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>`;
+
+    // Position after layout settles (DOM may not be final during render)
+    requestAnimationFrame(() => updateExpandAllBtnPosition(marginTop));
+}
+
+/**
  * Compute y position for an IP accounting for sub-row offset within an expanded row.
  * Falls back to base ipPositions when sub-row data is unavailable.
  */
@@ -423,7 +556,7 @@ function getIPYWithSubRowOffset(ip, srcIp, dstIp) {
  */
 function syncSubRowHighlights(svgEl, st) {
     const SUB_ROW_GAP = 2;
-    svgEl.selectAll('.sub-row-highlight').each(function() {
+    svgEl.selectAll('.sub-row-highlight, .sub-row-hover-target').each(function() {
         const rect = d3.select(this);
         const d = rect.datum();
         if (!d || !d.ip) return;
@@ -441,8 +574,40 @@ function syncSubRowHighlights(svgEl, st) {
     });
 }
 
+// Circle hover: highlight source/destination IP rows and labels
+function onCircleHighlight(srcIp, dstIps) {
+    // Bold source label, mark destination labels, fade others
+    svg.selectAll('.node-label')
+        .classed('highlighted', d => d === srcIp)
+        .classed('connected', d => dstIps.has(d))
+        .classed('faded', d => d !== srcIp && !dstIps.has(d));
+
+    // Grey row backgrounds for source and destination rows
+    svg.selectAll('.row-highlight')
+        .classed('self', d => d === srcIp)
+        .classed('active', d => dstIps.has(d));
+
+    // Sub-row highlights for expanded multi-pair IPs
+    svg.selectAll('.sub-row-highlight')
+        .classed('self', d => d && d.ip === srcIp)
+        .classed('active', d => d && dstIps.has(d.ip));
+}
+
+function onCircleClearHighlight() {
+    svg.selectAll('.node-label')
+        .classed('highlighted', false)
+        .classed('connected', false)
+        .classed('faded', false);
+    svg.selectAll('.row-highlight')
+        .classed('self', false)
+        .classed('active', false);
+    svg.selectAll('.sub-row-highlight')
+        .classed('self', false)
+        .classed('active', false);
+}
+
 // Wrapper to call imported renderCircles with required options and event handlers
-function renderCirclesWithOptions(layer, binned, rScale) {
+function renderCirclesWithOptions(layer, binned, rScale, transitionOpts) {
     const data = collapseSubRowsBins(binned, state.layout.collapsedIPs);
     const processed = renderCircles(layer, data, {
         xScale,
@@ -461,14 +626,17 @@ function renderCirclesWithOptions(layer, binned, rScale) {
         createTooltipHTML,
         FLAG_CURVATURE,
         d3,
-        separateFlags: state.ui.separateFlags
+        separateFlags: state.ui.separateFlags,
+        onCircleHighlight,
+        onCircleClearHighlight,
+        transitionOpts
     });
 
 }
 
 // Unified render function
-function renderMarksForLayerLocal(layer, data, rScale) {
-    return renderCirclesWithOptions(layer, data, rScale);
+function renderMarksForLayerLocal(layer, data, rScale, transitionOpts) {
+    return renderCirclesWithOptions(layer, data, rScale, transitionOpts);
 }
 
 // Size legend moved to control panel; update it there
@@ -646,27 +814,6 @@ function initializeBarVisualization() {
         onIpSearch: (term) => sbFilterIPList(term),
         onSelectAllIPs: () => { document.querySelectorAll('#ipCheckboxes input[type="checkbox"]').forEach(cb => cb.checked = true); updateIPFilter(); },
         onClearAllIPs: () => { document.querySelectorAll('#ipCheckboxes input[type="checkbox"]').forEach(cb => cb.checked = false); updateIPFilter(); },
-        onCollapseAllRows: () => {
-            // Add all IPs that have multiple pairs to the collapsed set
-            for (const ip of state.layout.ipOrder) {
-                if ((state.layout.ipPairCounts.get(ip) || 1) > 1) {
-                    state.layout.collapsedIPs.add(ip);
-                }
-            }
-            isHardResetInProgress = true;
-            visualizeTimeArcs(state.data.filtered);
-            updateTcpFlowPacketsGlobal();
-            drawSelectedFlowArcs();
-            applyInvalidReasonFilter();
-        },
-        onExpandAllRows: () => {
-            state.layout.collapsedIPs.clear();
-            isHardResetInProgress = true;
-            visualizeTimeArcs(state.data.filtered);
-            updateTcpFlowPacketsGlobal();
-            drawSelectedFlowArcs();
-            applyInvalidReasonFilter();
-        },
         onToggleShowTcpFlows: (checked) => { state.ui.showTcpFlows = checked; updateTcpFlowPacketsGlobal(); drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleEstablishment: (checked) => { state.ui.showEstablishment = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
         onToggleDataTransfer: (checked) => { state.ui.showDataTransfer = checked; drawSelectedFlowArcs(); try { applyInvalidReasonFilter(); } catch(e) { logCatchError('applyInvalidReasonFilter', e); } },
@@ -798,6 +945,11 @@ function setupWindowResizeHandler() {
             // Resize main SVG
             svg.attr('width', width + chartMarginLeft + chartMarginRight)
                .attr('height', height + 100); // Extra space for bottom margin
+
+            // Keep zoom-capture rect in sync with new dimensions
+            svg.select('.zoom-capture')
+                .attr('width', width)
+                .attr('height', height);
 
             // Update scales with new width
             if (xScale && state.data.timeExtent) {
@@ -3056,8 +3208,14 @@ function highlight(selected) {
             .classed("connected", d => d !== selected.ip && connectedIPs.has(d));
 
         mainGroup.selectAll(".direction-dot")
-            .classed("faded", d => d.src_ip !== selected.ip && d.dst_ip !== selected.ip)
-            .classed("highlighted", d => d.src_ip === selected.ip || d.dst_ip === selected.ip);
+            .classed("faded", d => {
+                if (d.allIPs) return !d.allIPs.has(selected.ip);
+                return d.src_ip !== selected.ip && d.dst_ip !== selected.ip;
+            })
+            .classed("highlighted", d => {
+                if (d.allIPs) return d.allIPs.has(selected.ip);
+                return d.src_ip === selected.ip || d.dst_ip === selected.ip;
+            });
 
         // Highlight row backgrounds for connected IPs
         svg.selectAll(".row-highlight")
@@ -3729,6 +3887,7 @@ function visualizeTimeArcs(packets) {
     d3.select("#chart").html("");
     document.getElementById('loadingMessage').style.display = 'none';
     isInitialResolutionLoad = true;
+    resetResolutionTransitionState();
 
     if (!packets || packets.length === 0) {
         document.getElementById('loadingMessage').textContent = 'No data to visualize.';
@@ -3766,7 +3925,7 @@ function visualizeTimeArcs(packets) {
     fullDomainBinsCache = { version: state.data.version, data: [], binSize: null, sorted: false };
 
     // 5. Layout setup
-    const margin = {top: 80, right: 120, bottom: 50, left: 150};
+    const margin = {top: 80, right: 120, bottom: 50, left: 180};
     width = d3.select("#chart-container").node().clientWidth - margin.left - margin.right;
     const DOT_RADIUS = 40;
 
@@ -3882,6 +4041,9 @@ function visualizeTimeArcs(packets) {
         });
     } catch (e) { LOG('Failed to build IP labels', e); }
 
+    // 12b. Create/update the floating expand-all sub-rows button
+    try { createOrUpdateExpandAllBtn(margin.top); } catch (e) { LOG('Expand-all btn failed', e); }
+
     // 13. Sync arc domain for overview brush (do NOT recreate overview chart here)
     try { window.__arc_x_domain__ = xScale.domain(); } catch(e) { logCatchError('setArcXDomain', e); }
 
@@ -3945,7 +4107,11 @@ function visualizeTimeArcs(packets) {
         scaleExtent: [1, 1e9],
         onZoom: zoomed
     });
-    zoomTarget = svgContainer;
+    // Attach zoom to inner svg group (not outer svgContainer) so D3's
+    // pointer-anchored zoom uses the circle coordinate system (post-margin).
+    // A transparent .zoom-capture rect in svgSetup.js ensures the <g>
+    // receives pointer events even in empty areas.
+    zoomTarget = svg;
     zoomTarget.call(zoom);
 
     // 16. Enable drag-to-reorder for IP rows

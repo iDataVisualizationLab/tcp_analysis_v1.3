@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Network TimeArcs</title>
   <script src="https://d3js.org/d3.v7.min.js"></script>
+  <link rel="stylesheet" href="shared.css">
   <link rel="stylesheet" href="attack-network.css">
   <link rel="preconnect" href="https://d3js.org" />
   <link rel="dns-prefetch" href="https://d3js.org" />
@@ -20,11 +21,11 @@
         <legend style="font-size:12px; padding:0 4px; font-weight:600;">Network Mode</legend>
         <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
           <input type="radio" name="labelMode" value="timearcs" id="labelModeTimearcs">
-          <span>Timearcs</span>
+          <span>Timearcs Time Line View</span>
         </label>
         <label style="display:flex; align-items:center; gap:4px; font-size:12px; cursor:pointer;">
           <input type="radio" name="labelMode" value="force_layout" id="labelModeForceLayout" checked>
-          <span>Force Layout</span>
+          <span>Force layout network view</span>
         </label>
       </fieldset>
       <div style="display:flex; align-items:center; gap:8px; padding:4px 8px; border:1px solid #dee2e6; border-radius:4px;">
@@ -36,7 +37,7 @@
         <span id="bifocalRegionText">Focus: 35% - 65%</span>
       </div>
       <div style="border-left: 2px solid #dee2e6; height: 30px; margin: 0 4px;"></div>
-      <button id="clearBrush" style="padding:6px 12px; border:1px solid #dee2e6; border-radius:4px; background:#fff; cursor:pointer; font-size:12px; font-weight:600; transition: all 0.2s;" title="Clear all selections">
+      <button id="clearBrush" class="cp-btn" title="Clear all selections">
         <span>✕ Clear Selections</span>
       </button>
       <div id="componentInfo" style="display:none; font-size:11px; padding:4px 8px; background:#e7f5ff; border:1px solid #74c0fc; border-radius:4px; margin-left:8px;">
